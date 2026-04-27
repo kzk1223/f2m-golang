@@ -2,8 +2,17 @@ package config
 
 // このファイルは、config package のテストを担当する。
 // *_test.go は通常ビルドに含まれず、go test 実行時のみ利用される検証コードである。
+// 主な検証対象:
+//   Parseによる設定文字列の正規化。
+//   F2M_ID単位の複数フォーム分離。
+//   不正設定に対する行番号付きエラー。
+//   LoadFileによる実設定ファイルの文字コード判定込み読み込み。
+// テスト実行例:
+//   $env:GOCACHE = (Join-Path (Get-Location) ".gocache"); go test ./...
+//   $env:GOCACHE = (Join-Path (Get-Location) ".gocache"); go test ./internal/config
 
 import (
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -112,5 +121,67 @@ F2M_CHK_EQ : mail
 	}
 	if !strings.Contains(err.Error(), "3 行目") {
 		t.Fatalf("error = %q", err.Error())
+	}
+}
+
+/**
+ * 実設定ファイル読み込みの検証。
+ *
+ * forms/f2m_conf.txtをLoadFile経由で解析する確認。
+ */
+func TestLoadFileSampleConfig(t *testing.T) {
+	configPath := filepath.Join("..", "..", "forms", "f2m_conf.txt")
+
+	configSet, err := LoadFile(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	formConfig, exists := configSet.Forms["contact"]
+	if !exists {
+		t.Fatal("contact config not found")
+	}
+
+	t.Logf("ID = %s", formConfig.ID)
+	t.Logf("From = %s", formConfig.From)
+	t.Logf("To = %v", formConfig.To)
+	t.Logf("Subject = %s", formConfig.Subject)
+	t.Logf("FieldOrder = %v", formConfig.FieldOrder)
+	t.Logf("FieldLabels = %v", formConfig.FieldLabels)
+	t.Logf("RequiredFields = %v", formConfig.RequiredFields)
+	t.Logf("EmailFields = %v", formConfig.EmailFields)
+	t.Logf("EqualFields = %+v", formConfig.EqualFields)
+	t.Logf("ReplyToField = %s", formConfig.ReplyToField)
+	t.Logf("ReplySubject = %s", formConfig.ReplySubject)
+	t.Logf("ReplyTemplate = %s", formConfig.ReplyTemplate)
+	t.Logf("MailTemplate = %s", formConfig.MailTemplate)
+	t.Logf("FormPath = %s", formConfig.FormPath)
+	t.Logf("ConfirmPath = %s", formConfig.ConfirmPath)
+	t.Logf("ThanksPath = %s", formConfig.ThanksPath)
+	t.Logf("CSVPath = %s", formConfig.CSVPath)
+	t.Logf("CSVCharset = %s", formConfig.CSVCharset)
+	t.Logf("CSRF = %t", formConfig.CSRF)
+	t.Logf("TokenExpire = %s", formConfig.TokenExpire)
+
+	if formConfig.FormPath != "./templates/form.html" {
+		t.Fatalf("FormPath = %q", formConfig.FormPath)
+	}
+	if formConfig.ConfirmPath != "./templates/confirm.html" {
+		t.Fatalf("ConfirmPath = %q", formConfig.ConfirmPath)
+	}
+	if formConfig.ThanksPath != "./templates/thanks.html" {
+		t.Fatalf("ThanksPath = %q", formConfig.ThanksPath)
+	}
+	if !formConfig.RequiredFields["contact"] {
+		t.Fatal("contact required field is false")
+	}
+	if !formConfig.EmailFields["mail"] {
+		t.Fatal("mail email field is false")
+	}
+	if len(formConfig.EqualFields) != 1 {
+		t.Fatalf("EqualFields length = %d", len(formConfig.EqualFields))
+	}
+	if formConfig.CSVCharset != "SJIS" {
+		t.Fatalf("CSVCharset = %q", formConfig.CSVCharset)
 	}
 }
