@@ -1,41 +1,45 @@
 package main
 
 import (
-"fmt"
-"log"
-"net/http"
+	"log"
+	"net/http"
+
+	"f2m-golang/internal/app"
+	"f2m-golang/internal/config"
+)
+
+const (
+	configPath    = "./f2m_conf.txt"
+	formID        = "contact"
+	serverAddress = "127.0.0.1:8088"
 )
 
 /**
  * 開発確認用HTTPサーバー。
  *
- * ローカル開発環境でGoの起動確認を行う。
+ * 設定ファイルを読み込み、フォーム画面制御を起動する。
  */
 func main() {
-mux := http.NewServeMux()
+	configSet, err := config.LoadFile(configPath)
+	if err != nil {
+		log.Fatal(err)
+	}
 
-// ---------------------------------------------
-// ルーティング
-// ---------------------------------------------
-mux.HandleFunc("/", handleIndex)
+	formConfig, ok := configSet.Forms[formID]
+	if !ok {
+		log.Fatalf("form config not found: %s", formID)
+	}
 
-addr := "127.0.0.1:8088"
-log.Printf("start server: http://%s", addr)
+	mux := http.NewServeMux()
 
-if err := http.ListenAndServe(addr, mux); err != nil {
-log.Fatal(err)
-}
-}
+	// ---------------------------------------------
+	// ルーティング
+	// ---------------------------------------------
+	mux.Handle("/", app.New(formConfig))
 
-/**
- * 動作確認用レスポンスを返す。
- *
- * Goサーバーが起動していることを確認する。
- */
-func handleIndex(w http.ResponseWriter, r *http.Request) {
-// ---------------------------------------------
-// レスポンス
-// ---------------------------------------------
-w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-fmt.Fprintln(w, "f2m-golang OK")
+	log.Printf("start server: http://%s", serverAddress)
+
+	if err := http.ListenAndServe(serverAddress, mux); err != nil {
+		log.Fatal(err)
+	}
 }

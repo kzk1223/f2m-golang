@@ -24,7 +24,7 @@ F2M_RESV_TMPL : ./templates/reply.txt
 # ---------------------------------------------
 # テンプレート
 # ---------------------------------------------
-F2M_FORM : ./templates/form.html
+F2M_FORM : ./form.html
 F2M_CONFIRM : ./templates/confirm.html
 F2M_THANKS : ./templates/thanks.html
 F2M_MAIL_TMPL : ./templates/mail.txt

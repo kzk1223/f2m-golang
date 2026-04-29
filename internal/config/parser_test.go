@@ -127,10 +127,10 @@ F2M_CHK_EQ : mail
 /**
  * 実設定ファイル読み込みの検証。
  *
- * forms/f2m_conf.txtをLoadFile経由で解析する確認。
+ * f2m_conf.txtをLoadFile経由で解析する確認。
  */
 func TestLoadFileSampleConfig(t *testing.T) {
-	configPath := filepath.Join("..", "..", "forms", "f2m_conf.txt")
+	configPath := filepath.Join("..", "..", "f2m_conf.txt")
 
 	configSet, err := LoadFile(configPath)
 	if err != nil {
@@ -163,7 +163,7 @@ func TestLoadFileSampleConfig(t *testing.T) {
 	t.Logf("CSRF = %t", formConfig.CSRF)
 	t.Logf("TokenExpire = %s", formConfig.TokenExpire)
 
-	if formConfig.FormPath != "./templates/form.html" {
+	if formConfig.FormPath != "./form.html" {
 		t.Fatalf("FormPath = %q", formConfig.FormPath)
 	}
 	if formConfig.ConfirmPath != "./templates/confirm.html" {
