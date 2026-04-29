@@ -10,7 +10,6 @@ import (
 
 const (
 	configPath    = "./f2m_conf.txt"
-	formID        = "contact"
 	serverAddress = "127.0.0.1:8088"
 )
 
@@ -25,17 +24,12 @@ func main() {
 		log.Fatal(err)
 	}
 
-	formConfig, ok := configSet.Forms[formID]
-	if !ok {
-		log.Fatalf("form config not found: %s", formID)
-	}
-
 	mux := http.NewServeMux()
 
 	// ---------------------------------------------
 	// ルーティング
 	// ---------------------------------------------
-	mux.Handle("/", app.New(formConfig))
+	mux.Handle("/", app.New(configSet))
 
 	log.Printf("start server: http://%s", serverAddress)
 

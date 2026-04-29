@@ -2,8 +2,10 @@
 package app
 
 import (
+	"fmt"
 	"html/template"
 	"net/http"
+	"sort"
 	"strings"
 
 	"f2m-golang/internal/config"
@@ -15,17 +17,17 @@ import (
  * 入力、確認、完了の画面遷移を扱うHTTP handler。
  */
 type Handler struct {
-	formConfig config.FormConfig
+	configSet *config.ConfigSet
 }
 
 /**
  * フォーム画面制御の生成。
  *
- * フォーム設定を保持したHTTP handlerを返す。
+ * 設定集合を保持したHTTP handlerを返す。
  */
-func New(formConfig config.FormConfig) http.Handler {
+func New(configSet *config.ConfigSet) http.Handler {
 	return &Handler{
-		formConfig: formConfig,
+		configSet: configSet,
 	}
 }
 
@@ -48,7 +50,13 @@ func (handler *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// ---------------------------------------------
 	switch r.Method {
 	case http.MethodGet:
-		handler.renderForm(w, nil)
+		formConfig, ok := handler.defaultFormConfig()
+		if !ok {
+			http.Error(w, "form config not found", http.StatusInternalServerError)
+			return
+		}
+
+		handler.renderForm(w, formConfig, nil, FormErrors{})
 	case http.MethodPost:
 		handler.handlePost(w, r)
 	default:
@@ -71,28 +79,53 @@ func (handler *Handler) handlePost(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	fieldValues := handler.collectFieldValues(r)
+	formConfig, ok := handler.findFormConfig(r)
+	if !ok {
+		http.Error(w, "invalid F2M_ID", http.StatusBadRequest)
+		return
+	}
+
+	fieldValues := handler.collectFieldValues(r, formConfig)
 
 	// ---------------------------------------------
 	// 画面遷移
 	// ---------------------------------------------
 	switch r.PostFormValue("mode") {
 	case "form":
-		handler.renderForm(w, fieldValues)
+		handler.renderForm(w, formConfig, fieldValues, FormErrors{})
 	case "send":
-		handler.renderThanks(w, fieldValues)
+		formErrors := validateFields(formConfig, fieldValues)
+		if formErrors.HasErrors() {
+			handler.renderForm(w, formConfig, fieldValues, formErrors)
+			return
+		}
+
+		handler.renderThanks(w, formConfig, fieldValues)
 	default:
-		handler.renderConfirm(w, fieldValues)
+		formErrors := validateFields(formConfig, fieldValues)
+		if formErrors.HasErrors() {
+			handler.renderForm(w, formConfig, fieldValues, formErrors)
+			return
+		}
+
+		handler.renderConfirm(w, formConfig, fieldValues)
 	}
 }
 
 /**
  * 入力画面描画。
  *
- * フォームテンプレートへ画面表示用データを渡す処理。
+ * 固定HTMLフォームへ入力値とエラーを反映する処理。
  */
-func (handler *Handler) renderForm(w http.ResponseWriter, fieldValues map[string]string) {
-	handler.render(w, handler.formConfig.FormPath, handler.newPageView(fieldValues))
+func (handler *Handler) renderForm(w http.ResponseWriter, formConfig config.FormConfig, fieldValues map[string]string, formErrors FormErrors) {
+	renderedHTML, err := renderFixedFormFile(formConfig.FormPath, formConfig, fieldValues, formErrors)
+	if err != nil {
+		http.Error(w, "form render error", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	fmt.Fprint(w, renderedHTML)
 }
 
 /**
@@ -100,8 +133,8 @@ func (handler *Handler) renderForm(w http.ResponseWriter, fieldValues map[string
  *
  * 確認テンプレートへ画面表示用データを渡す処理。
  */
-func (handler *Handler) renderConfirm(w http.ResponseWriter, fieldValues map[string]string) {
-	handler.render(w, handler.formConfig.ConfirmPath, handler.newPageView(fieldValues))
+func (handler *Handler) renderConfirm(w http.ResponseWriter, formConfig config.FormConfig, fieldValues map[string]string) {
+	handler.render(w, formConfig.ConfirmPath, handler.newPageView(formConfig, fieldValues))
 }
 
 /**
@@ -109,8 +142,8 @@ func (handler *Handler) renderConfirm(w http.ResponseWriter, fieldValues map[str
  *
  * 完了テンプレートへ画面表示用データを渡す処理。
  */
-func (handler *Handler) renderThanks(w http.ResponseWriter, fieldValues map[string]string) {
-	handler.render(w, handler.formConfig.ThanksPath, handler.newPageView(fieldValues))
+func (handler *Handler) renderThanks(w http.ResponseWriter, formConfig config.FormConfig, fieldValues map[string]string) {
+	handler.render(w, formConfig.ThanksPath, handler.newPageView(formConfig, fieldValues))
 }
 
 /**
@@ -143,10 +176,10 @@ func (handler *Handler) render(w http.ResponseWriter, templatePath string, pageV
  *
  * 設定上の表示順に対応する入力値だけを取得する処理。
  */
-func (handler *Handler) collectFieldValues(r *http.Request) map[string]string {
+func (handler *Handler) collectFieldValues(r *http.Request, formConfig config.FormConfig) map[string]string {
 	fieldValues := make(map[string]string)
 
-	for _, fieldName := range handler.formConfig.FieldOrder {
+	for _, fieldName := range configuredFieldNames(formConfig) {
 		fieldValues[fieldName] = r.PostFormValue(fieldName)
 	}
 
@@ -154,27 +187,100 @@ func (handler *Handler) collectFieldValues(r *http.Request) map[string]string {
 }
 
 /**
+ * 設定済み項目名生成。
+ *
+ * 表示順と検証対象から入力値収集に必要な項目名を生成する処理。
+ */
+func configuredFieldNames(formConfig config.FormConfig) []string {
+	fieldNames := make([]string, 0)
+	seen := make(map[string]bool)
+
+	appendFieldName := func(fieldName string) {
+		fieldName = strings.TrimSpace(fieldName)
+		if fieldName == "" || seen[fieldName] {
+			return
+		}
+
+		fieldNames = append(fieldNames, fieldName)
+		seen[fieldName] = true
+	}
+
+	for _, fieldName := range formConfig.FieldOrder {
+		appendFieldName(fieldName)
+	}
+	for _, fieldName := range orderedFieldNames(nil, formConfig.RequiredFields) {
+		appendFieldName(fieldName)
+	}
+	for _, fieldName := range orderedFieldNames(nil, formConfig.EmailFields) {
+		appendFieldName(fieldName)
+	}
+	for _, equalField := range formConfig.EqualFields {
+		appendFieldName(equalField.Left)
+		appendFieldName(equalField.Right)
+	}
+
+	return fieldNames
+}
+
+/**
  * 画面表示データ生成。
  *
  * テンプレートから扱いやすい表示用データへの変換処理。
  */
-func (handler *Handler) newPageView(fieldValues map[string]string) PageView {
-	fields := make([]FieldView, 0, len(handler.formConfig.FieldOrder))
+func (handler *Handler) newPageView(formConfig config.FormConfig, fieldValues map[string]string) PageView {
+	fields := make([]FieldView, 0, len(formConfig.FieldOrder))
 
-	for _, fieldName := range handler.formConfig.FieldOrder {
+	for _, fieldName := range formConfig.FieldOrder {
 		fields = append(fields, FieldView{
 			Name:      fieldName,
-			Label:     handler.formConfig.FieldLabels[fieldName],
+			Label:     formConfig.FieldLabels[fieldName],
 			Value:     fieldValues[fieldName],
-			Type:      handler.fieldType(fieldName),
+			Type:      fieldType(formConfig, fieldName),
 			Multiline: isMultilineField(fieldName),
 		})
 	}
 
 	return PageView{
-		Title:  handler.formConfig.Subject,
+		FormID: formConfig.ID,
+		Title:  formConfig.Subject,
 		Fields: fields,
 	}
+}
+
+/**
+ * フォーム設定選択。
+ *
+ * POSTされたF2M_IDに対応するフォーム設定を取得する処理。
+ */
+func (handler *Handler) findFormConfig(r *http.Request) (config.FormConfig, bool) {
+	formID := strings.TrimSpace(r.PostFormValue("F2M_ID"))
+	if formID == "" {
+		return config.FormConfig{}, false
+	}
+
+	formConfig, ok := handler.configSet.Forms[formID]
+
+	return formConfig, ok
+}
+
+/**
+ * 既定フォーム設定選択。
+ *
+ * GET表示用に安定した順序で先頭のフォーム設定を取得する処理。
+ */
+func (handler *Handler) defaultFormConfig() (config.FormConfig, bool) {
+	if handler.configSet == nil || len(handler.configSet.Forms) == 0 {
+		return config.FormConfig{}, false
+	}
+
+	formIDs := make([]string, 0, len(handler.configSet.Forms))
+	for formID := range handler.configSet.Forms {
+		formIDs = append(formIDs, formID)
+	}
+
+	sort.Strings(formIDs)
+
+	return handler.configSet.Forms[formIDs[0]], true
 }
 
 /**
@@ -182,8 +288,8 @@ func (handler *Handler) newPageView(fieldValues map[string]string) PageView {
  *
  * 設定上のメールチェック対象をemail入力として扱う処理。
  */
-func (handler *Handler) fieldType(fieldName string) string {
-	if handler.formConfig.EmailFields[fieldName] {
+func fieldType(formConfig config.FormConfig, fieldName string) string {
+	if formConfig.EmailFields[fieldName] {
 		return "email"
 	}
 
@@ -210,6 +316,7 @@ func isMultilineField(fieldName string) bool {
  * テンプレートに渡すページ単位の値。
  */
 type PageView struct {
+	FormID string
 	Title  string
 	Fields []FieldView
 }

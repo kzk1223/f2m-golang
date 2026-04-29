@@ -19,6 +19,7 @@ coverage.out
 # Local Go cache
 # ---------------------------------------------
 .gocache/
+.gomodcache/
 
 # ---------------------------------------------
 # Runtime storage
