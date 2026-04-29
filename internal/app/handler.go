@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"html/template"
 	"net/http"
-	"sort"
 	"strings"
 
 	"f2m-golang/internal/config"
@@ -49,18 +48,10 @@ func (handler *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// メソッド制御
 	// ---------------------------------------------
 	switch r.Method {
-	case http.MethodGet:
-		formConfig, ok := handler.defaultFormConfig()
-		if !ok {
-			http.Error(w, "form config not found", http.StatusInternalServerError)
-			return
-		}
-
-		handler.renderForm(w, formConfig, nil, FormErrors{})
 	case http.MethodPost:
 		handler.handlePost(w, r)
 	default:
-		w.Header().Set("Allow", http.MethodGet+", "+http.MethodPost)
+		w.Header().Set("Allow", http.MethodPost)
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 	}
 }
@@ -261,26 +252,6 @@ func (handler *Handler) findFormConfig(r *http.Request) (config.FormConfig, bool
 	formConfig, ok := handler.configSet.Forms[formID]
 
 	return formConfig, ok
-}
-
-/**
- * 既定フォーム設定選択。
- *
- * GET表示用に安定した順序で先頭のフォーム設定を取得する処理。
- */
-func (handler *Handler) defaultFormConfig() (config.FormConfig, bool) {
-	if handler.configSet == nil || len(handler.configSet.Forms) == 0 {
-		return config.FormConfig{}, false
-	}
-
-	formIDs := make([]string, 0, len(handler.configSet.Forms))
-	for formID := range handler.configSet.Forms {
-		formIDs = append(formIDs, formID)
-	}
-
-	sort.Strings(formIDs)
-
-	return handler.configSet.Forms[formIDs[0]], true
 }
 
 /**

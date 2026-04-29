@@ -18,13 +18,10 @@ import (
 /**
  * フォーム画面遷移の確認。
  *
- * GET、確認POST、戻るPOST、完了POSTの分岐を検証する。
+ * 確認POST、戻るPOST、完了POSTの分岐を検証する。
  */
 func TestHandlerTransitions(t *testing.T) {
 	handler := New(newTestConfigSet(t))
-
-	getResponse := performRequest(handler, http.MethodGet, "/", nil)
-	assertResponseContains(t, getResponse, http.StatusOK, `name="F2M_ID"`, `value="contact"`, `name="contact"`)
 
 	confirmResponse := performRequest(handler, http.MethodPost, "/", url.Values{
 		"F2M_ID":  {"contact"},
@@ -54,6 +51,19 @@ func TestHandlerTransitions(t *testing.T) {
 		"contact": {"確認テスト"},
 	})
 	assertResponse(t, thanksResponse, http.StatusOK, "THANKS お問い合わせ")
+}
+
+/**
+ * GETリクエスト拒否の確認。
+ *
+ * フォーム処理handlerがPOST専用であることを検証する。
+ */
+func TestHandlerRejectsGetRequest(t *testing.T) {
+	handler := New(newTestConfigSet(t))
+
+	response := performRequest(handler, http.MethodGet, "/", nil)
+
+	assertResponse(t, response, http.StatusMethodNotAllowed, "method not allowed")
 }
 
 /**

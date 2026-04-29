@@ -24,16 +24,35 @@ func main() {
 		log.Fatal(err)
 	}
 
-	mux := http.NewServeMux()
-
-	// ---------------------------------------------
-	// ルーティング
-	// ---------------------------------------------
-	mux.Handle("/", app.New(configSet))
+	mux := newServerMux(".", app.New(configSet))
 
 	log.Printf("start server: http://%s", serverAddress)
 
 	if err := http.ListenAndServe(serverAddress, mux); err != nil {
 		log.Fatal(err)
 	}
+}
+
+/**
+ * 開発サーバールーター生成。
+ *
+ * GETを静的配信へ、POST / をフォーム処理へ振り分ける処理。
+ */
+func newServerMux(documentRoot string, formHandler http.Handler) http.Handler {
+	mux := http.NewServeMux()
+	fileServer := http.FileServer(http.Dir(documentRoot))
+
+	// ---------------------------------------------
+	// ルーティング
+	// ---------------------------------------------
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost && r.URL.Path == "/" {
+			formHandler.ServeHTTP(w, r)
+			return
+		}
+
+		fileServer.ServeHTTP(w, r)
+	})
+
+	return mux
 }
