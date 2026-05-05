@@ -4,12 +4,14 @@ package app
 import (
 	"fmt"
 	"html/template"
+	"net"
 	"net/http"
 	"strings"
 	"time"
 
 	"f2m-golang/internal/config"
 	"f2m-golang/internal/security"
+	"f2m-golang/internal/storage"
 )
 
 const (
@@ -107,6 +109,11 @@ func (handler *Handler) handlePost(w http.ResponseWriter, r *http.Request) {
 
 		if err := handler.verifySubmitToken(r, formConfig, fieldValues); err != nil {
 			http.Error(w, "invalid submit token", http.StatusBadRequest)
+			return
+		}
+
+		if err := storage.AppendCSV(formConfig, fieldValues, newCSVSubmitMeta(r)); err != nil {
+			http.Error(w, "csv save error", http.StatusInternalServerError)
 			return
 		}
 
@@ -212,6 +219,34 @@ func (handler *Handler) collectFieldValues(r *http.Request, formConfig config.Fo
  */
 func (handler *Handler) verifySubmitToken(r *http.Request, formConfig config.FormConfig, fieldValues map[string]string) error {
 	return handler.submitTokenSigner.Verify(r.PostFormValue(submitTokenFieldName), formConfig.ID, fieldValues)
+}
+
+/**
+ * CSV送信メタ情報生成。
+ *
+ * HTTPリクエストからCSV保存用の送信日時と参考IP情報を生成する処理。
+ */
+func newCSVSubmitMeta(r *http.Request) storage.CSVSubmitMeta {
+	return storage.CSVSubmitMeta{
+		SentAt:        time.Now(),
+		RemoteIP:      remoteIP(r),
+		XForwardedFor: r.Header.Get("X-Forwarded-For"),
+		XRealIP:       r.Header.Get("X-Real-IP"),
+	}
+}
+
+/**
+ * 接続元IP取得。
+ *
+ * RemoteAddrからポートを除いた接続元IPを取得する処理。
+ */
+func remoteIP(r *http.Request) string {
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err == nil {
+		return host
+	}
+
+	return r.RemoteAddr
 }
 
 /**

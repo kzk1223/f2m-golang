@@ -4,6 +4,8 @@ package app
 // 実行方法: go test ./internal/app
 
 import (
+	"encoding/csv"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -11,6 +13,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"f2m-golang/internal/config"
 )
@@ -109,6 +112,46 @@ func TestHandlerRejectsTamperedSendValues(t *testing.T) {
 	})
 
 	assertResponse(t, response, http.StatusBadRequest, "invalid submit token")
+}
+
+/**
+ * CSV保存付き送信の確認。
+ *
+ * mode=send成功時に設定されたCSVへ送信内容が保存されることを検証する。
+ */
+func TestHandlerSavesCSVOnSend(t *testing.T) {
+	configSet := newTestConfigSet(t)
+	csvPath := filepath.Join(t.TempDir(), "contact.csv")
+	formConfig := configSet.Forms["contact"]
+	formConfig.CSVPath = csvPath
+	formConfig.CSVCharset = "UTF-8"
+	configSet.Forms["contact"] = formConfig
+	handler := New(configSet)
+
+	confirmResponse := performRequest(handler, http.MethodPost, "/", url.Values{
+		"F2M_ID":  {"contact"},
+		"name":    {"山田太郎"},
+		"mail":    {"taro@example.com"},
+		"mail2":   {"taro@example.com"},
+		"contact": {"CSV保存テスト"},
+	})
+	submitToken := extractSubmitToken(t, confirmResponse)
+
+	response := performRequestWithMeta(handler, http.MethodPost, "/", url.Values{
+		"F2M_ID":           {"contact"},
+		"mode":             {"send"},
+		"f2m_submit_token": {submitToken},
+		"name":             {"山田太郎"},
+		"mail":             {"taro@example.com"},
+		"mail2":            {"taro@example.com"},
+		"contact":          {"CSV保存テスト"},
+	}, "203.0.113.10:54321", http.Header{
+		"X-Forwarded-For": {"198.51.100.1, 198.51.100.2"},
+		"X-Real-Ip":       {"198.51.100.1"},
+	})
+
+	assertResponse(t, response, http.StatusOK, "THANKS お問い合わせ")
+	assertSavedCSVWithSubmitMeta(t, csvPath)
 }
 
 /**
@@ -288,6 +331,15 @@ func writeTestTemplate(t *testing.T, templateDir string, fileName string, templa
  * url.ValuesをフォームPOSTとして送信する処理。
  */
 func performRequest(handler http.Handler, method string, path string, formValues url.Values) *httptest.ResponseRecorder {
+	return performRequestWithMeta(handler, method, path, formValues, "", nil)
+}
+
+/**
+ * テスト用HTTPリクエスト実行。
+ *
+ * 接続元情報とHTTPヘッダーを指定してフォームPOSTを送信する処理。
+ */
+func performRequestWithMeta(handler http.Handler, method string, path string, formValues url.Values, remoteAddr string, headers http.Header) *httptest.ResponseRecorder {
 	var requestBody *strings.Reader
 	if formValues == nil {
 		requestBody = strings.NewReader("")
@@ -298,6 +350,14 @@ func performRequest(handler http.Handler, method string, path string, formValues
 	request := httptest.NewRequest(method, path, requestBody)
 	if formValues != nil {
 		request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	}
+	if remoteAddr != "" {
+		request.RemoteAddr = remoteAddr
+	}
+	for headerName, headerValues := range headers {
+		for _, headerValue := range headerValues {
+			request.Header.Add(headerName, headerValue)
+		}
 	}
 
 	response := httptest.NewRecorder()
@@ -358,4 +418,68 @@ func extractSubmitToken(t *testing.T, response *httptest.ResponseRecorder) strin
 	}
 
 	return body[tokenStart : tokenStart+tokenEnd]
+}
+
+/**
+ * メタ情報付き保存済みCSV検証。
+ *
+ * CSVファイルを読み込み、入力値と送信付加情報が保存されていることを検証する。
+ */
+func assertSavedCSVWithSubmitMeta(t *testing.T, csvPath string) {
+	t.Helper()
+
+	csvBytes, err := os.ReadFile(csvPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	csvReader := csv.NewReader(strings.NewReader(string(csvBytes)))
+	actualRecords, err := csvReader.ReadAll()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	expectedHeader := []string{"お名前", "メールアドレス", "メールアドレス確認用", "お問い合わせ内容", "送信日時", "送信元IP", "X-Forwarded-For", "X-Real-IP"}
+	if len(actualRecords) != 2 {
+		t.Fatalf("records = %#v, want 2 records", actualRecords)
+	}
+	if strings.Join(actualRecords[0], "\x00") != strings.Join(expectedHeader, "\x00") {
+		t.Fatalf("header = %#v, want %#v", actualRecords[0], expectedHeader)
+	}
+
+	valueRecord := actualRecords[1]
+	if len(valueRecord) != len(expectedHeader) {
+		t.Fatalf("value record = %#v, want %d columns", valueRecord, len(expectedHeader))
+	}
+
+	expectedPrefix := []string{"山田太郎", "taro@example.com", "taro@example.com", "CSV保存テスト"}
+	if strings.Join(valueRecord[:4], "\x00") != strings.Join(expectedPrefix, "\x00") {
+		t.Fatalf("value record prefix = %#v, want %#v", valueRecord[:4], expectedPrefix)
+	}
+	if _, err := time.Parse("2006-01-02 15:04:05", valueRecord[4]); err != nil {
+		t.Fatalf("sent at = %q, want timestamp layout: %v", valueRecord[4], err)
+	}
+	if valueRecord[5] != "203.0.113.10" {
+		t.Fatalf("remote ip = %q, want %q", valueRecord[5], "203.0.113.10")
+	}
+	if valueRecord[6] != "198.51.100.1, 198.51.100.2" {
+		t.Fatalf("x-forwarded-for = %q, want %q", valueRecord[6], "198.51.100.1, 198.51.100.2")
+	}
+	if valueRecord[7] != "198.51.100.1" {
+		t.Fatalf("x-real-ip = %q, want %q", valueRecord[7], "198.51.100.1")
+	}
+}
+
+/**
+ * 接続元IP取得の確認。
+ *
+ * RemoteAddrからポート番号を除いたIPが取得されることを検証する。
+ */
+func TestRemoteIPRemovesPort(t *testing.T) {
+	request := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(""))
+	request.RemoteAddr = net.JoinHostPort("203.0.113.10", "54321")
+
+	if actualIP := remoteIP(request); actualIP != "203.0.113.10" {
+		t.Fatalf("remoteIP = %q, want %q", actualIP, "203.0.113.10")
+	}
 }
