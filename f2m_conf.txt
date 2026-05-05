@@ -9,8 +9,8 @@ F2M_SUBJECT : お問い合わせがありました
 # ---------------------------------------------
 # 入力チェック
 # ---------------------------------------------
-F2M_CHK : name,mail,mail2,contact
-F2M_JPNAME : name:お名前,mail:メールアドレス,mail2:メールアドレス確認用,contact:お問い合わせ内容
+F2M_CHK : name,mail,mail2,gender,interest,contact
+F2M_JPNAME : name:お名前,mail:メールアドレス,mail2:メールアドレス確認用,gender:性別,interest:興味のある内容,contact:お問い合わせ内容
 F2M_CHK_EMAIL : mail
 F2M_CHK_EQ : mail:mail2
 

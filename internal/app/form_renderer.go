@@ -15,7 +15,7 @@ import (
  *
  * 入力フォームHTMLをDOMとして読み込み、入力値とエラーを反映する処理。
  */
-func renderFixedFormFile(templatePath string, formConfig config.FormConfig, fieldValues map[string]string, formErrors FormErrors) (string, error) {
+func renderFixedFormFile(templatePath string, formConfig config.FormConfig, fieldValues FieldValues, formErrors FormErrors) (string, error) {
 	templateHTML, _, err := charset.ReadFile(templatePath)
 	if err != nil {
 		return "", err
@@ -114,7 +114,7 @@ func formHasID(formNode *html.Node, formID string) bool {
  *
  * form配下の入力要素へPOST済み値を反映する処理。
  */
-func restoreFormValues(formNode *html.Node, fieldValues map[string]string) {
+func restoreFormValues(formNode *html.Node, fieldValues FieldValues) {
 	if len(fieldValues) == 0 {
 		return
 	}
@@ -138,13 +138,13 @@ func restoreFormValues(formNode *html.Node, fieldValues map[string]string) {
  *
  * input要素の種別に応じてvalueまたはcheckedを反映する処理。
  */
-func restoreInputValue(inputNode *html.Node, fieldValues map[string]string) {
+func restoreInputValue(inputNode *html.Node, fieldValues FieldValues) {
 	fieldName, ok := getAttribute(inputNode, "name")
 	if !ok {
 		return
 	}
 
-	fieldValue, exists := fieldValues[fieldName]
+	_, exists := fieldValues[fieldName]
 	if !exists {
 		return
 	}
@@ -159,13 +159,13 @@ func restoreInputValue(inputNode *html.Node, fieldValues map[string]string) {
 			optionValue = "on"
 		}
 
-		if optionValue == fieldValue {
+		if fieldValues.Contains(fieldName, optionValue) {
 			setAttribute(inputNode, "checked", "checked")
 		} else {
 			removeAttribute(inputNode, "checked")
 		}
 	default:
-		setAttribute(inputNode, "value", fieldValue)
+		setAttribute(inputNode, "value", fieldValues.First(fieldName))
 	}
 }
 
@@ -174,13 +174,13 @@ func restoreInputValue(inputNode *html.Node, fieldValues map[string]string) {
  *
  * textarea要素の子ノードを入力値で置き換える処理。
  */
-func restoreTextareaValue(textareaNode *html.Node, fieldValues map[string]string) {
+func restoreTextareaValue(textareaNode *html.Node, fieldValues FieldValues) {
 	fieldName, ok := getAttribute(textareaNode, "name")
 	if !ok {
 		return
 	}
 
-	fieldValue, exists := fieldValues[fieldName]
+	_, exists := fieldValues[fieldName]
 	if !exists {
 		return
 	}
@@ -188,7 +188,7 @@ func restoreTextareaValue(textareaNode *html.Node, fieldValues map[string]string
 	removeChildren(textareaNode)
 	textareaNode.AppendChild(&html.Node{
 		Type: html.TextNode,
-		Data: fieldValue,
+		Data: fieldValues.First(fieldName),
 	})
 }
 
@@ -197,13 +197,13 @@ func restoreTextareaValue(textareaNode *html.Node, fieldValues map[string]string
  *
  * select配下のoption要素へselected状態を反映する処理。
  */
-func restoreSelectValue(selectNode *html.Node, fieldValues map[string]string) {
+func restoreSelectValue(selectNode *html.Node, fieldValues FieldValues) {
 	fieldName, ok := getAttribute(selectNode, "name")
 	if !ok {
 		return
 	}
 
-	fieldValue, exists := fieldValues[fieldName]
+	_, exists := fieldValues[fieldName]
 	if !exists {
 		return
 	}
@@ -218,7 +218,7 @@ func restoreSelectValue(selectNode *html.Node, fieldValues map[string]string) {
 			optionValue = strings.TrimSpace(textContent(node))
 		}
 
-		if optionValue == fieldValue {
+		if fieldValues.Contains(fieldName, optionValue) {
 			setAttribute(node, "selected", "selected")
 		} else {
 			removeAttribute(node, "selected")
@@ -258,11 +258,11 @@ func insertErrorSummary(formNode *html.Node, formErrors FormErrors) {
  * 入力要素の直後へ項目別エラーを追加する処理。
  */
 func insertFieldErrors(formNode *html.Node, formErrors FormErrors) {
-	insertedFieldErrors := make(map[string]bool)
+	lastFieldNodes := make(map[string]*html.Node)
 
 	walkHTML(formNode, func(node *html.Node) bool {
 		fieldName, ok := formFieldName(node)
-		if !ok || insertedFieldErrors[fieldName] {
+		if !ok {
 			return true
 		}
 
@@ -274,17 +274,31 @@ func insertFieldErrors(formNode *html.Node, formErrors FormErrors) {
 		errorID := "f2m-error-" + fieldName
 		setAttribute(node, "aria-invalid", "true")
 		setAttribute(node, "aria-describedby", errorID)
+		lastFieldNodes[fieldName] = node
+
+		return true
+	})
+
+	walkHTML(formNode, func(node *html.Node) bool {
+		fieldName, ok := formFieldName(node)
+		if !ok || lastFieldNodes[fieldName] != node {
+			return true
+		}
+
+		messages := formErrors.Fields[fieldName]
+		if len(messages) == 0 {
+			return true
+		}
 
 		errorNode := newElementNode(
 			"p",
 			html.Attribute{Key: "class", Val: "f2m-field-error"},
-			html.Attribute{Key: "id", Val: errorID},
+			html.Attribute{Key: "id", Val: "f2m-error-" + fieldName},
 			html.Attribute{Key: "data-f2m-error-for", Val: fieldName},
 		)
 		errorNode.AppendChild(newTextNode(strings.Join(messages, " ")))
 
 		insertAfter(node, errorNode)
-		insertedFieldErrors[fieldName] = true
 
 		return true
 	})

@@ -134,7 +134,7 @@ func (handler *Handler) handlePost(w http.ResponseWriter, r *http.Request) {
  *
  * 固定HTMLフォームへ入力値とエラーを反映する処理。
  */
-func (handler *Handler) renderForm(w http.ResponseWriter, formConfig config.FormConfig, fieldValues map[string]string, formErrors FormErrors) {
+func (handler *Handler) renderForm(w http.ResponseWriter, formConfig config.FormConfig, fieldValues FieldValues, formErrors FormErrors) {
 	renderedHTML, err := renderFixedFormFile(formConfig.FormPath, formConfig, fieldValues, formErrors)
 	if err != nil {
 		http.Error(w, "form render error", http.StatusInternalServerError)
@@ -150,7 +150,7 @@ func (handler *Handler) renderForm(w http.ResponseWriter, formConfig config.Form
  *
  * 確認テンプレートへ画面表示用データを渡す処理。
  */
-func (handler *Handler) renderConfirm(w http.ResponseWriter, formConfig config.FormConfig, fieldValues map[string]string) {
+func (handler *Handler) renderConfirm(w http.ResponseWriter, formConfig config.FormConfig, fieldValues FieldValues) {
 	pageView := handler.newPageView(formConfig, fieldValues)
 	submitToken, err := handler.submitTokenSigner.Sign(formConfig.ID, fieldValues, tokenExpire(formConfig))
 	if err != nil {
@@ -168,7 +168,7 @@ func (handler *Handler) renderConfirm(w http.ResponseWriter, formConfig config.F
  *
  * 完了テンプレートへ画面表示用データを渡す処理。
  */
-func (handler *Handler) renderThanks(w http.ResponseWriter, formConfig config.FormConfig, fieldValues map[string]string) {
+func (handler *Handler) renderThanks(w http.ResponseWriter, formConfig config.FormConfig, fieldValues FieldValues) {
 	handler.render(w, formConfig.ThanksPath, handler.newPageView(formConfig, fieldValues))
 }
 
@@ -202,11 +202,11 @@ func (handler *Handler) render(w http.ResponseWriter, templatePath string, pageV
  *
  * 設定上の表示順に対応する入力値だけを取得する処理。
  */
-func (handler *Handler) collectFieldValues(r *http.Request, formConfig config.FormConfig) map[string]string {
-	fieldValues := make(map[string]string)
+func (handler *Handler) collectFieldValues(r *http.Request, formConfig config.FormConfig) FieldValues {
+	fieldValues := make(FieldValues)
 
 	for _, fieldName := range configuredFieldNames(formConfig) {
-		fieldValues[fieldName] = r.PostFormValue(fieldName)
+		fieldValues[fieldName] = append([]string(nil), r.PostForm[fieldName]...)
 	}
 
 	return fieldValues
@@ -217,7 +217,7 @@ func (handler *Handler) collectFieldValues(r *http.Request, formConfig config.Fo
  *
  * 確認画面で発行した署名付き送信トークンとPOST値の一致を検証する処理。
  */
-func (handler *Handler) verifySubmitToken(r *http.Request, formConfig config.FormConfig, fieldValues map[string]string) error {
+func (handler *Handler) verifySubmitToken(r *http.Request, formConfig config.FormConfig, fieldValues FieldValues) error {
 	return handler.submitTokenSigner.Verify(r.PostFormValue(submitTokenFieldName), formConfig.ID, fieldValues)
 }
 
@@ -303,14 +303,15 @@ func configuredFieldNames(formConfig config.FormConfig) []string {
  *
  * テンプレートから扱いやすい表示用データへの変換処理。
  */
-func (handler *Handler) newPageView(formConfig config.FormConfig, fieldValues map[string]string) PageView {
+func (handler *Handler) newPageView(formConfig config.FormConfig, fieldValues FieldValues) PageView {
 	fields := make([]FieldView, 0, len(formConfig.FieldOrder))
 
 	for _, fieldName := range formConfig.FieldOrder {
 		fields = append(fields, FieldView{
 			Name:      fieldName,
 			Label:     formConfig.FieldLabels[fieldName],
-			Value:     fieldValues[fieldName],
+			Value:     fieldValues.Joined(fieldName),
+			Values:    fieldValues.CloneValues(fieldName),
 			Type:      fieldType(formConfig, fieldName),
 			Multiline: isMultilineField(fieldName),
 		})
@@ -387,6 +388,7 @@ type FieldView struct {
 	Name      string
 	Label     string
 	Value     string
+	Values    []string
 	Type      string
 	Multiline bool
 }

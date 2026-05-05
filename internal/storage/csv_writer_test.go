@@ -26,10 +26,10 @@ func TestAppendCSVWritesHeaderAndData(t *testing.T) {
 	csvPath := filepath.Join(t.TempDir(), "contact.csv")
 	formConfig := newCSVTestFormConfig(csvPath, "UTF-8")
 
-	err := AppendCSV(formConfig, map[string]string{
-		"name":    "山田太郎",
-		"mail":    "taro@example.com",
-		"contact": "改行\nカンマ,引用\"",
+	err := AppendCSV(formConfig, map[string][]string{
+		"name":    {"山田太郎"},
+		"mail":    {"taro@example.com"},
+		"contact": {"改行\nカンマ,引用\""},
 	}, newCSVTestSubmitMeta())
 	if err != nil {
 		t.Fatal(err)
@@ -50,10 +50,10 @@ func TestAppendCSVAppendsWithoutDuplicatingHeader(t *testing.T) {
 	csvPath := filepath.Join(t.TempDir(), "contact.csv")
 	formConfig := newCSVTestFormConfig(csvPath, "UTF-8")
 
-	if err := AppendCSV(formConfig, map[string]string{"name": "山田太郎", "mail": "taro@example.com", "contact": "初回"}, newCSVTestSubmitMeta()); err != nil {
+	if err := AppendCSV(formConfig, map[string][]string{"name": {"山田太郎"}, "mail": {"taro@example.com"}, "contact": {"初回"}}, newCSVTestSubmitMeta()); err != nil {
 		t.Fatal(err)
 	}
-	if err := AppendCSV(formConfig, map[string]string{"name": "佐藤花子", "mail": "hanako@example.com", "contact": "追記"}, newCSVTestSubmitMeta()); err != nil {
+	if err := AppendCSV(formConfig, map[string][]string{"name": {"佐藤花子"}, "mail": {"hanako@example.com"}, "contact": {"追記"}}, newCSVTestSubmitMeta()); err != nil {
 		t.Fatal(err)
 	}
 
@@ -70,7 +70,7 @@ func TestAppendCSVAppendsWithoutDuplicatingHeader(t *testing.T) {
  * CSVパスが空の場合に保存処理が何もしないことを検証する。
  */
 func TestAppendCSVSkipsEmptyPath(t *testing.T) {
-	err := AppendCSV(config.FormConfig{}, map[string]string{"name": "山田太郎"}, CSVSubmitMeta{})
+	err := AppendCSV(config.FormConfig{}, map[string][]string{"name": {"山田太郎"}}, CSVSubmitMeta{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -85,7 +85,7 @@ func TestAppendCSVWritesShiftJIS(t *testing.T) {
 	csvPath := filepath.Join(t.TempDir(), "contact.csv")
 	formConfig := newCSVTestFormConfig(csvPath, "SJIS")
 
-	if err := AppendCSV(formConfig, map[string]string{"name": "山田太郎", "mail": "taro@example.com", "contact": "確認"}, newCSVTestSubmitMeta()); err != nil {
+	if err := AppendCSV(formConfig, map[string][]string{"name": {"山田太郎"}, "mail": {"taro@example.com"}, "contact": {"確認"}}, newCSVTestSubmitMeta()); err != nil {
 		t.Fatal(err)
 	}
 
@@ -104,6 +104,30 @@ func TestAppendCSVWritesShiftJIS(t *testing.T) {
 	if !strings.Contains(decodedCSVText, "山田太郎") {
 		t.Fatalf("decoded csv = %q, want contains %q", decodedCSVText, "山田太郎")
 	}
+}
+
+/**
+ * CSV複数値保存の確認。
+ *
+ * checkbox相当の複数値が読点区切りで1セルに保存されることを検証する。
+ */
+func TestAppendCSVJoinsMultipleValues(t *testing.T) {
+	csvPath := filepath.Join(t.TempDir(), "survey.csv")
+	formConfig := config.FormConfig{
+		FieldOrder:  []string{"interest"},
+		FieldLabels: map[string]string{"interest": "興味のある内容"},
+		CSVPath:     csvPath,
+		CSVCharset:  "UTF-8",
+	}
+
+	if err := AppendCSV(formConfig, map[string][]string{"interest": {"資料請求", "見積依頼"}}, newCSVTestSubmitMeta()); err != nil {
+		t.Fatal(err)
+	}
+
+	assertCSVRecords(t, csvPath, [][]string{
+		{"興味のある内容", "送信日時", "送信元IP", "X-Forwarded-For", "X-Real-IP"},
+		{"資料請求、見積依頼", "2026-05-06 12:34:56", "203.0.113.10", "198.51.100.1, 198.51.100.2", "198.51.100.1"},
+	})
 }
 
 /**

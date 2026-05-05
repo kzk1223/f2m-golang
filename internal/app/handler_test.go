@@ -155,6 +155,58 @@ func TestHandlerSavesCSVOnSend(t *testing.T) {
 }
 
 /**
+ * radioとcheckbox入力の確認。
+ *
+ * 複数値の確認表示、戻る復元、送信遷移を検証する。
+ */
+func TestHandlerHandlesRadioAndCheckboxValues(t *testing.T) {
+	handler := New(newTestConfigSet(t))
+
+	confirmResponse := performRequest(handler, http.MethodPost, "/", url.Values{
+		"F2M_ID":   {"survey"},
+		"name":     {"山田太郎"},
+		"interest": {"資料請求", "見積依頼"},
+		"gender":   {"女性"},
+	})
+	assertResponseContains(
+		t,
+		confirmResponse,
+		http.StatusOK,
+		"name=山田太郎 interest=資料請求、見積依頼 gender=女性",
+		`name="interest" value="資料請求"`,
+		`name="interest" value="見積依頼"`,
+		`name="gender" value="女性"`,
+	)
+	submitToken := extractSubmitToken(t, confirmResponse)
+
+	backResponse := performRequest(handler, http.MethodPost, "/", url.Values{
+		"F2M_ID":   {"survey"},
+		"mode":     {"form"},
+		"name":     {"山田太郎"},
+		"interest": {"資料請求", "見積依頼"},
+		"gender":   {"女性"},
+	})
+	assertResponseContains(
+		t,
+		backResponse,
+		http.StatusOK,
+		`value="資料請求" checked="checked"`,
+		`value="見積依頼" checked="checked"`,
+		`value="女性" checked="checked"`,
+	)
+
+	thanksResponse := performRequest(handler, http.MethodPost, "/", url.Values{
+		"F2M_ID":           {"survey"},
+		"mode":             {"send"},
+		"f2m_submit_token": {submitToken},
+		"name":             {"山田太郎"},
+		"interest":         {"資料請求", "見積依頼"},
+		"gender":           {"女性"},
+	})
+	assertResponse(t, thanksResponse, http.StatusOK, "THANKS アンケート")
+}
+
+/**
  * GETリクエスト拒否の確認。
  *
  * フォーム処理handlerがPOST専用であることを検証する。
@@ -279,7 +331,23 @@ func newTestConfigSet(t *testing.T) *config.ConfigSet {
 </body>
 </html>
 `)
-	writeTestTemplate(t, templateDir, "confirm.html", `CONFIRM{{range .Fields}} {{.Name}}={{.Value}}{{end}} <input type="hidden" name="f2m_submit_token" value="{{.SubmitToken}}">`)
+	writeTestTemplate(t, templateDir, "survey_form.html", `
+<!doctype html>
+<html lang="ja">
+<body>
+<form method="post" action="/">
+<input type="hidden" name="F2M_ID" value="survey">
+<input name="name">
+<label><input type="checkbox" name="interest" value="資料請求">資料請求</label>
+<label><input type="checkbox" name="interest" value="見積依頼">見積依頼</label>
+<label><input type="checkbox" name="interest" value="相談したい">相談したい</label>
+<label><input type="radio" name="gender" value="男性">男性</label>
+<label><input type="radio" name="gender" value="女性">女性</label>
+</form>
+</body>
+</html>
+`)
+	writeTestTemplate(t, templateDir, "confirm.html", `CONFIRM{{range .Fields}} {{.Name}}={{.Value}}{{end}} <input type="hidden" name="f2m_submit_token" value="{{.SubmitToken}}">{{range .Fields}}{{$field := .}}{{range .Values}}<input type="hidden" name="{{$field.Name}}" value="{{.}}">{{end}}{{end}}`)
 	writeTestTemplate(t, templateDir, "thanks.html", `THANKS {{.Title}}`)
 
 	return &config.ConfigSet{
@@ -306,6 +374,17 @@ func newTestConfigSet(t *testing.T) *config.ConfigSet {
 				ConfirmPath:    filepath.Join(templateDir, "confirm.html"),
 				ThanksPath:     filepath.Join(templateDir, "thanks.html"),
 				RequiredFields: map[string]bool{},
+			},
+			"survey": {
+				ID:             "survey",
+				Subject:        "アンケート",
+				FieldOrder:     []string{"name", "interest", "gender"},
+				FieldLabels:    map[string]string{"name": "お名前", "interest": "興味のある内容", "gender": "性別"},
+				EmailFields:    map[string]bool{},
+				FormPath:       filepath.Join(templateDir, "survey_form.html"),
+				ConfirmPath:    filepath.Join(templateDir, "confirm.html"),
+				ThanksPath:     filepath.Join(templateDir, "thanks.html"),
+				RequiredFields: map[string]bool{"name": true, "interest": true, "gender": true},
 			},
 		},
 	}

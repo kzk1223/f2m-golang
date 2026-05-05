@@ -99,7 +99,10 @@ button {
 			<input type="hidden" name="F2M_ID" value="{{.FormID}}">
 			<input type="hidden" name="f2m_submit_token" value="{{.SubmitToken}}">
 			{{range .Fields}}
-			<input type="hidden" name="{{.Name}}" value="{{.Value}}">
+			{{$field := .}}
+			{{range .Values}}
+			<input type="hidden" name="{{$field.Name}}" value="{{.}}">
+			{{end}}
 			{{end}}
 			<div class="actions">
 				<button class="button-back" type="submit" name="mode" value="form">戻る</button>

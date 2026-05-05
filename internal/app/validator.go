@@ -47,7 +47,7 @@ func (formErrors *FormErrors) Add(fieldName string, message string) {
  *
  * フォーム設定に基づく必須、メール形式、一致チェックの処理。
  */
-func validateFields(formConfig config.FormConfig, fieldValues map[string]string) FormErrors {
+func validateFields(formConfig config.FormConfig, fieldValues FieldValues) FormErrors {
 	formErrors := FormErrors{
 		Fields: make(map[string][]string),
 	}
@@ -60,7 +60,7 @@ func validateFields(formConfig config.FormConfig, fieldValues map[string]string)
 			continue
 		}
 
-		if strings.TrimSpace(fieldValues[fieldName]) == "" {
+		if !fieldValues.HasAny(fieldName) {
 			formErrors.Add(fieldName, fmt.Sprintf("%sを入力してください。", fieldLabel(formConfig, fieldName)))
 		}
 	}
@@ -73,7 +73,7 @@ func validateFields(formConfig config.FormConfig, fieldValues map[string]string)
 			continue
 		}
 
-		fieldValue := strings.TrimSpace(fieldValues[fieldName])
+		fieldValue := strings.TrimSpace(fieldValues.First(fieldName))
 		if fieldValue != "" && !isEmailAddress(fieldValue) {
 			formErrors.Add(fieldName, fmt.Sprintf("%sの形式が不正です。", fieldLabel(formConfig, fieldName)))
 		}
@@ -83,7 +83,7 @@ func validateFields(formConfig config.FormConfig, fieldValues map[string]string)
 	// 一致チェック
 	// ---------------------------------------------
 	for _, equalField := range formConfig.EqualFields {
-		if fieldValues[equalField.Left] != fieldValues[equalField.Right] {
+		if fieldValues.First(equalField.Left) != fieldValues.First(equalField.Right) {
 			message := fmt.Sprintf(
 				"%sと%sが一致しません。",
 				fieldLabel(formConfig, equalField.Left),

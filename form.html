@@ -83,6 +83,23 @@ textarea {
 	resize: vertical;
 }
 
+.choices {
+	display: grid;
+	gap: 8px;
+}
+
+.choice {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	font-weight: 400;
+	margin: 0;
+}
+
+.choice input {
+	width: auto;
+}
+
 .actions {
 	display: flex;
 	justify-content: flex-end;
@@ -118,6 +135,22 @@ button {
 			<div class="field">
 				<label for="mail2">メールアドレス確認用</label>
 				<input id="mail2" type="email" name="mail2">
+			</div>
+			<div class="field">
+				<label>性別</label>
+				<div class="choices">
+					<label class="choice"><input type="radio" name="gender" value="男性">男性</label>
+					<label class="choice"><input type="radio" name="gender" value="女性">女性</label>
+					<label class="choice"><input type="radio" name="gender" value="回答しない">回答しない</label>
+				</div>
+			</div>
+			<div class="field">
+				<label>興味のある内容</label>
+				<div class="choices">
+					<label class="choice"><input type="checkbox" name="interest" value="資料請求">資料請求</label>
+					<label class="choice"><input type="checkbox" name="interest" value="見積依頼">見積依頼</label>
+					<label class="choice"><input type="checkbox" name="interest" value="相談したい">相談したい</label>
+				</div>
 			</div>
 			<div class="field">
 				<label for="contact">お問い合わせ内容</label>

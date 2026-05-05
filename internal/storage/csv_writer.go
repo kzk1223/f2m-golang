@@ -31,7 +31,7 @@ var csvWriteMu sync.Mutex
  *
  * 設定されたCSVパスへ入力値を項目順で追記する処理。
  */
-func AppendCSV(formConfig config.FormConfig, fieldValues map[string]string, submitMeta CSVSubmitMeta) (returnErr error) {
+func AppendCSV(formConfig config.FormConfig, fieldValues map[string][]string, submitMeta CSVSubmitMeta) (returnErr error) {
 	csvPath := strings.TrimSpace(formConfig.CSVPath)
 	if csvPath == "" {
 		return nil
@@ -173,11 +173,11 @@ func csvHeaderRecord(formConfig config.FormConfig) []string {
  *
  * F2M_JPNAMEの表示順で入力値と送信メタ情報の行を生成する処理。
  */
-func csvValueRecord(formConfig config.FormConfig, fieldValues map[string]string, submitMeta CSVSubmitMeta) []string {
+func csvValueRecord(formConfig config.FormConfig, fieldValues map[string][]string, submitMeta CSVSubmitMeta) []string {
 	valueRecord := make([]string, 0, len(formConfig.FieldOrder)+4)
 
 	for _, fieldName := range formConfig.FieldOrder {
-		valueRecord = append(valueRecord, fieldValues[fieldName])
+		valueRecord = append(valueRecord, joinCSVFieldValues(fieldValues[fieldName]))
 	}
 
 	valueRecord = append(
@@ -189,6 +189,15 @@ func csvValueRecord(formConfig config.FormConfig, fieldValues map[string]string,
 	)
 
 	return valueRecord
+}
+
+/**
+ * CSV入力値結合。
+ *
+ * 複数選択値を1セル保存用の文字列へ変換する処理。
+ */
+func joinCSVFieldValues(values []string) string {
+	return strings.Join(values, "、")
 }
 
 /**
