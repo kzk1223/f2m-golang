@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"f2m-golang/internal/config"
+	"f2m-golang/internal/mailer"
 )
 
 /**
@@ -152,6 +153,59 @@ func TestHandlerSavesCSVOnSend(t *testing.T) {
 
 	assertResponse(t, response, http.StatusOK, "THANKS お問い合わせ")
 	assertSavedCSVWithSubmitMeta(t, csvPath)
+}
+
+/**
+ * メール送信付き送信の確認。
+ *
+ * mode=send成功時に管理者通知と自動返信が送信されることを検証する。
+ */
+func TestHandlerSendsMailOnSend(t *testing.T) {
+	configSet := newTestConfigSet(t)
+	templateDir := t.TempDir()
+	mailTemplatePath := writeTestTemplate(t, templateDir, "mail.txt", `MAIL{{range .Fields}} {{.Name}}={{.Value}}{{end}}`)
+	replyTemplatePath := writeTestTemplate(t, templateDir, "reply.txt", `REPLY {{.First "name"}}`)
+
+	formConfig := configSet.Forms["contact"]
+	formConfig.From = "form@example.com"
+	formConfig.To = []string{"admin@example.com"}
+	formConfig.MailTemplate = mailTemplatePath
+	formConfig.ReplyToField = "mail"
+	formConfig.ReplySubject = "自動返信"
+	formConfig.ReplyTemplate = replyTemplatePath
+	configSet.Forms["contact"] = formConfig
+
+	mailSender := &fakeMailSender{}
+	handler := newWithMailSender(configSet, mailSender)
+
+	confirmResponse := performRequest(handler, http.MethodPost, "/", url.Values{
+		"F2M_ID":  {"contact"},
+		"name":    {"山田太郎"},
+		"mail":    {"taro@example.com"},
+		"mail2":   {"taro@example.com"},
+		"contact": {"メール送信テスト"},
+	})
+	submitToken := extractSubmitToken(t, confirmResponse)
+
+	response := performRequestWithMeta(handler, http.MethodPost, "/", url.Values{
+		"F2M_ID":           {"contact"},
+		"mode":             {"send"},
+		"f2m_submit_token": {submitToken},
+		"name":             {"山田太郎"},
+		"mail":             {"taro@example.com"},
+		"mail2":            {"taro@example.com"},
+		"contact":          {"メール送信テスト"},
+	}, "203.0.113.10:54321", http.Header{
+		"X-Forwarded-For": {"198.51.100.1, 198.51.100.2"},
+		"X-Real-Ip":       {"198.51.100.1"},
+	})
+
+	assertResponse(t, response, http.StatusOK, "THANKS お問い合わせ")
+	if len(mailSender.messages) != 2 {
+		t.Fatalf("mail messages length = %d, want 2", len(mailSender.messages))
+	}
+	assertAppMailMessage(t, mailSender.messages[0], []string{"admin@example.com"}, "お問い合わせ", "contact=メール送信テスト", "送信元IP: 203.0.113.10", "X-Forwarded-For: 198.51.100.1, 198.51.100.2", "X-Real-IP: 198.51.100.1")
+	assertAppMailMessage(t, mailSender.messages[1], []string{"taro@example.com"}, "自動返信", "REPLY 山田太郎")
 }
 
 /**
@@ -395,13 +449,15 @@ func newTestConfigSet(t *testing.T) *config.ConfigSet {
  *
  * 一時ディレクトリへ最小テンプレートを配置する処理。
  */
-func writeTestTemplate(t *testing.T, templateDir string, fileName string, templateText string) {
+func writeTestTemplate(t *testing.T, templateDir string, fileName string, templateText string) string {
 	t.Helper()
 
 	templatePath := filepath.Join(templateDir, fileName)
 	if err := os.WriteFile(templatePath, []byte(templateText), 0644); err != nil {
 		t.Fatal(err)
 	}
+
+	return templatePath
 }
 
 /**
@@ -560,5 +616,46 @@ func TestRemoteIPRemovesPort(t *testing.T) {
 
 	if actualIP := remoteIP(request); actualIP != "203.0.113.10" {
 		t.Fatalf("remoteIP = %q, want %q", actualIP, "203.0.113.10")
+	}
+}
+
+/**
+ * テスト用メール送信処理。
+ *
+ * 送信メールをメモリ上に記録する処理。
+ */
+type fakeMailSender struct {
+	messages []mailer.Message
+}
+
+/**
+ * テスト用メール記録。
+ *
+ * 送信メールを順序付きで保持する処理。
+ */
+func (sender *fakeMailSender) Send(_ config.FormConfig, message mailer.Message) error {
+	sender.messages = append(sender.messages, message)
+
+	return nil
+}
+
+/**
+ * 送信メール検証。
+ *
+ * 宛先、件名、本文を確認する処理。
+ */
+func assertAppMailMessage(t *testing.T, message mailer.Message, expectedTo []string, expectedSubject string, expectedBodies ...string) {
+	t.Helper()
+
+	if strings.Join(message.To, "\x00") != strings.Join(expectedTo, "\x00") {
+		t.Fatalf("message to = %#v, want %#v", message.To, expectedTo)
+	}
+	if message.Subject != expectedSubject {
+		t.Fatalf("message subject = %q, want %q", message.Subject, expectedSubject)
+	}
+	for _, expectedBody := range expectedBodies {
+		if !strings.Contains(message.Body, expectedBody) {
+			t.Fatalf("message body = %q, want contains %q", message.Body, expectedBody)
+		}
 	}
 }

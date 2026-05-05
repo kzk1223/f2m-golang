@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"f2m-golang/internal/config"
+	"f2m-golang/internal/mailer"
 	"f2m-golang/internal/security"
 	"f2m-golang/internal/storage"
 )
@@ -26,6 +27,7 @@ const (
  */
 type Handler struct {
 	configSet         *config.ConfigSet
+	mailService       *mailer.Service
 	submitTokenSigner *security.SubmitTokenSigner
 }
 
@@ -35,6 +37,24 @@ type Handler struct {
  * 設定集合を保持したHTTP handlerを返す。
  */
 func New(configSet *config.ConfigSet) http.Handler {
+	return newHandler(configSet, mailer.NewService(mailer.NewGoMailSender()))
+}
+
+/**
+ * フォーム画面制御の生成。
+ *
+ * テスト用のメール送信処理を差し替えたHTTP handlerを返す。
+ */
+func newWithMailSender(configSet *config.ConfigSet, mailSender mailer.Sender) http.Handler {
+	return newHandler(configSet, mailer.NewService(mailSender))
+}
+
+/**
+ * フォーム画面制御の生成。
+ *
+ * 設定集合とメール送信サービスを保持したHTTP handlerを返す。
+ */
+func newHandler(configSet *config.ConfigSet, mailService *mailer.Service) http.Handler {
 	submitTokenSigner, err := security.NewSubmitTokenSigner()
 	if err != nil {
 		panic(err)
@@ -42,6 +62,7 @@ func New(configSet *config.ConfigSet) http.Handler {
 
 	return &Handler{
 		configSet:         configSet,
+		mailService:       mailService,
 		submitTokenSigner: submitTokenSigner,
 	}
 }
@@ -112,8 +133,14 @@ func (handler *Handler) handlePost(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		if err := storage.AppendCSV(formConfig, fieldValues, newCSVSubmitMeta(r)); err != nil {
+		submitMeta := newCSVSubmitMeta(r)
+		if err := storage.AppendCSV(formConfig, fieldValues, submitMeta); err != nil {
 			http.Error(w, "csv save error", http.StatusInternalServerError)
+			return
+		}
+
+		if err := handler.mailService.SendAll(formConfig, fieldValues, newMailSubmitMeta(submitMeta)); err != nil {
+			http.Error(w, "mail send error", http.StatusInternalServerError)
 			return
 		}
 
@@ -232,6 +259,20 @@ func newCSVSubmitMeta(r *http.Request) storage.CSVSubmitMeta {
 		RemoteIP:      remoteIP(r),
 		XForwardedFor: r.Header.Get("X-Forwarded-For"),
 		XRealIP:       r.Header.Get("X-Real-IP"),
+	}
+}
+
+/**
+ * メール送信メタ情報生成。
+ *
+ * CSV保存と同じ送信付加情報をメール送信用の値へ変換する処理。
+ */
+func newMailSubmitMeta(submitMeta storage.CSVSubmitMeta) mailer.SubmitMeta {
+	return mailer.SubmitMeta{
+		SentAt:        submitMeta.SentAt,
+		RemoteIP:      submitMeta.RemoteIP,
+		XForwardedFor: submitMeta.XForwardedFor,
+		XRealIP:       submitMeta.XRealIP,
 	}
 }
 
