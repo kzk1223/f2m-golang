@@ -30,7 +30,14 @@ func TestHandlerTransitions(t *testing.T) {
 		"mail2":   {"taro@example.com"},
 		"contact": {"確認テスト"},
 	})
-	assertResponse(t, confirmResponse, http.StatusOK, "CONFIRM name=山田太郎 mail=taro@example.com mail2=taro@example.com contact=確認テスト")
+	assertResponseContains(
+		t,
+		confirmResponse,
+		http.StatusOK,
+		"CONFIRM name=山田太郎 mail=taro@example.com mail2=taro@example.com contact=確認テスト",
+		`name="f2m_submit_token"`,
+	)
+	submitToken := extractSubmitToken(t, confirmResponse)
 
 	backResponse := performRequest(handler, http.MethodPost, "/", url.Values{
 		"F2M_ID":  {"contact"},
@@ -43,6 +50,26 @@ func TestHandlerTransitions(t *testing.T) {
 	assertResponseContains(t, backResponse, http.StatusOK, `value="山田太郎"`, `value="taro@example.com"`, `確認テスト`)
 
 	thanksResponse := performRequest(handler, http.MethodPost, "/", url.Values{
+		"F2M_ID":           {"contact"},
+		"mode":             {"send"},
+		"f2m_submit_token": {submitToken},
+		"name":             {"山田太郎"},
+		"mail":             {"taro@example.com"},
+		"mail2":            {"taro@example.com"},
+		"contact":          {"確認テスト"},
+	})
+	assertResponse(t, thanksResponse, http.StatusOK, "THANKS お問い合わせ")
+}
+
+/**
+ * 送信トークンなし送信の拒否確認。
+ *
+ * 確認画面を経由しないmode=sendが拒否されることを検証する。
+ */
+func TestHandlerRejectsSendWithoutSubmitToken(t *testing.T) {
+	handler := New(newTestConfigSet(t))
+
+	response := performRequest(handler, http.MethodPost, "/", url.Values{
 		"F2M_ID":  {"contact"},
 		"mode":    {"send"},
 		"name":    {"山田太郎"},
@@ -50,7 +77,38 @@ func TestHandlerTransitions(t *testing.T) {
 		"mail2":   {"taro@example.com"},
 		"contact": {"確認テスト"},
 	})
-	assertResponse(t, thanksResponse, http.StatusOK, "THANKS お問い合わせ")
+
+	assertResponse(t, response, http.StatusBadRequest, "invalid submit token")
+}
+
+/**
+ * 送信値改ざんの拒否確認。
+ *
+ * 確認画面で署名した入力値と異なるmode=sendが拒否されることを検証する。
+ */
+func TestHandlerRejectsTamperedSendValues(t *testing.T) {
+	handler := New(newTestConfigSet(t))
+
+	confirmResponse := performRequest(handler, http.MethodPost, "/", url.Values{
+		"F2M_ID":  {"contact"},
+		"name":    {"山田太郎"},
+		"mail":    {"taro@example.com"},
+		"mail2":   {"taro@example.com"},
+		"contact": {"確認テスト"},
+	})
+	submitToken := extractSubmitToken(t, confirmResponse)
+
+	response := performRequest(handler, http.MethodPost, "/", url.Values{
+		"F2M_ID":           {"contact"},
+		"mode":             {"send"},
+		"f2m_submit_token": {submitToken},
+		"name":             {"山田太郎"},
+		"mail":             {"taro@example.com"},
+		"mail2":            {"taro@example.com"},
+		"contact":          {"改ざんテスト"},
+	})
+
+	assertResponse(t, response, http.StatusBadRequest, "invalid submit token")
 }
 
 /**
@@ -178,7 +236,7 @@ func newTestConfigSet(t *testing.T) *config.ConfigSet {
 </body>
 </html>
 `)
-	writeTestTemplate(t, templateDir, "confirm.html", `CONFIRM{{range .Fields}} {{.Name}}={{.Value}}{{end}}`)
+	writeTestTemplate(t, templateDir, "confirm.html", `CONFIRM{{range .Fields}} {{.Name}}={{.Value}}{{end}} <input type="hidden" name="f2m_submit_token" value="{{.SubmitToken}}">`)
 	writeTestTemplate(t, templateDir, "thanks.html", `THANKS {{.Title}}`)
 
 	return &config.ConfigSet{
@@ -276,4 +334,28 @@ func assertResponseContains(t *testing.T, response *httptest.ResponseRecorder, e
 			t.Fatalf("body = %q, want contains %q", response.Body.String(), expectedBody)
 		}
 	}
+}
+
+/**
+ * 送信トークン抽出。
+ *
+ * 確認画面HTMLからhiddenの送信トークン値を取り出す処理。
+ */
+func extractSubmitToken(t *testing.T, response *httptest.ResponseRecorder) string {
+	t.Helper()
+
+	tokenPrefix := `name="f2m_submit_token" value="`
+	body := response.Body.String()
+	tokenStart := strings.Index(body, tokenPrefix)
+	if tokenStart < 0 {
+		t.Fatalf("body = %q, want submit token", body)
+	}
+
+	tokenStart += len(tokenPrefix)
+	tokenEnd := strings.Index(body[tokenStart:], `"`)
+	if tokenEnd < 0 {
+		t.Fatalf("body = %q, want submit token closing quote", body)
+	}
+
+	return body[tokenStart : tokenStart+tokenEnd]
 }

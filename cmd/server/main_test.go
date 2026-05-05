@@ -61,6 +61,24 @@ func TestServerRouting(t *testing.T) {
 }
 
 /**
+ * ルートGETの静的配信確認。
+ *
+ * GET / がフォーム処理ではなくドキュメントルートの静的配信へ委譲されることを検証する。
+ */
+func TestServerRoutesGetRootToStaticFile(t *testing.T) {
+	documentRoot := t.TempDir()
+	writeServerTestFile(t, documentRoot, "index.html", `STATIC INDEX`)
+
+	mux := newServerMux(documentRoot, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "form handler called", http.StatusInternalServerError)
+	}))
+
+	response := performServerRequest(mux, http.MethodGet, "/", nil)
+
+	assertServerResponseContains(t, response, http.StatusOK, "STATIC INDEX")
+}
+
+/**
  * テスト用ファイル書き込み。
  *
  * 一時ドキュメントルートへ検証用ファイルを配置する処理。

@@ -97,6 +97,7 @@ button {
 		</dl>
 		<form method="post" action="/">
 			<input type="hidden" name="F2M_ID" value="{{.FormID}}">
+			<input type="hidden" name="f2m_submit_token" value="{{.SubmitToken}}">
 			{{range .Fields}}
 			<input type="hidden" name="{{.Name}}" value="{{.Value}}">
 			{{end}}

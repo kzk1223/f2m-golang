@@ -6,8 +6,15 @@ import (
 	"html/template"
 	"net/http"
 	"strings"
+	"time"
 
 	"f2m-golang/internal/config"
+	"f2m-golang/internal/security"
+)
+
+const (
+	submitTokenFieldName = "f2m_submit_token"
+	defaultTokenExpire   = 30 * time.Minute
 )
 
 /**
@@ -16,7 +23,8 @@ import (
  * 入力、確認、完了の画面遷移を扱うHTTP handler。
  */
 type Handler struct {
-	configSet *config.ConfigSet
+	configSet         *config.ConfigSet
+	submitTokenSigner *security.SubmitTokenSigner
 }
 
 /**
@@ -25,8 +33,14 @@ type Handler struct {
  * 設定集合を保持したHTTP handlerを返す。
  */
 func New(configSet *config.ConfigSet) http.Handler {
+	submitTokenSigner, err := security.NewSubmitTokenSigner()
+	if err != nil {
+		panic(err)
+	}
+
 	return &Handler{
-		configSet: configSet,
+		configSet:         configSet,
+		submitTokenSigner: submitTokenSigner,
 	}
 }
 
@@ -91,6 +105,11 @@ func (handler *Handler) handlePost(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
+		if err := handler.verifySubmitToken(r, formConfig, fieldValues); err != nil {
+			http.Error(w, "invalid submit token", http.StatusBadRequest)
+			return
+		}
+
 		handler.renderThanks(w, formConfig, fieldValues)
 	default:
 		formErrors := validateFields(formConfig, fieldValues)
@@ -125,7 +144,16 @@ func (handler *Handler) renderForm(w http.ResponseWriter, formConfig config.Form
  * 確認テンプレートへ画面表示用データを渡す処理。
  */
 func (handler *Handler) renderConfirm(w http.ResponseWriter, formConfig config.FormConfig, fieldValues map[string]string) {
-	handler.render(w, formConfig.ConfirmPath, handler.newPageView(formConfig, fieldValues))
+	pageView := handler.newPageView(formConfig, fieldValues)
+	submitToken, err := handler.submitTokenSigner.Sign(formConfig.ID, fieldValues, tokenExpire(formConfig))
+	if err != nil {
+		http.Error(w, "submit token error", http.StatusInternalServerError)
+		return
+	}
+
+	pageView.SubmitToken = submitToken
+
+	handler.render(w, formConfig.ConfirmPath, pageView)
 }
 
 /**
@@ -175,6 +203,28 @@ func (handler *Handler) collectFieldValues(r *http.Request, formConfig config.Fo
 	}
 
 	return fieldValues
+}
+
+/**
+ * 送信トークン検証。
+ *
+ * 確認画面で発行した署名付き送信トークンとPOST値の一致を検証する処理。
+ */
+func (handler *Handler) verifySubmitToken(r *http.Request, formConfig config.FormConfig, fieldValues map[string]string) error {
+	return handler.submitTokenSigner.Verify(r.PostFormValue(submitTokenFieldName), formConfig.ID, fieldValues)
+}
+
+/**
+ * 送信トークン有効期限取得。
+ *
+ * 設定値がない場合は初期有効期限を返す処理。
+ */
+func tokenExpire(formConfig config.FormConfig) time.Duration {
+	if formConfig.TokenExpire > 0 {
+		return formConfig.TokenExpire
+	}
+
+	return defaultTokenExpire
 }
 
 /**
@@ -287,9 +337,10 @@ func isMultilineField(fieldName string) bool {
  * テンプレートに渡すページ単位の値。
  */
 type PageView struct {
-	FormID string
-	Title  string
-	Fields []FieldView
+	FormID      string
+	Title       string
+	Fields      []FieldView
+	SubmitToken string
 }
 
 /**
