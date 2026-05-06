@@ -167,7 +167,6 @@ func TestLoadFileSampleConfig(t *testing.T) {
 	t.Logf("ThanksPath = %s", formConfig.ThanksPath)
 	t.Logf("CSVPath = %s", formConfig.CSVPath)
 	t.Logf("CSVCharset = %s", formConfig.CSVCharset)
-	t.Logf("CSRF = %t", formConfig.CSRF)
 	t.Logf("TokenExpire = %s", formConfig.TokenExpire)
 	t.Logf("HoneypotEnabled = %t", formConfig.HoneypotEnabled)
 	t.Logf("HoneypotField = %s", formConfig.HoneypotField)

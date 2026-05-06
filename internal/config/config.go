@@ -62,7 +62,6 @@ type FormConfig struct {
 	InputCharset  string
 	OutputCharset string
 
-	CSRF            bool
 	TokenExpire     time.Duration
 	HoneypotEnabled bool
 	HoneypotField   string

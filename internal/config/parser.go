@@ -124,7 +124,6 @@ func newDefaultFormConfig(id string) FormConfig {
 		InputCharset:  "auto",
 		OutputCharset: "UTF-8",
 
-		CSRF:        true,
 		TokenExpire: 30 * time.Minute,
 		RateLimit:   time.Minute,
 	}
@@ -205,8 +204,6 @@ func applyValue(formConfig *FormConfig, key string, value string) error {
 		formConfig.InputCharset = value
 	case "F2M_OUTPUT_CHARSET":
 		formConfig.OutputCharset = value
-	case "F2M_CSRF":
-		formConfig.CSRF = parseBool(value)
 	case "F2M_TOKEN_EXPIRE":
 		tokenExpire, err := time.ParseDuration(value)
 		if err != nil {
