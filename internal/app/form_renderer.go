@@ -35,6 +35,7 @@ func renderFixedFormFile(templatePath string, formConfig config.FormConfig, fiel
 	// 入力値・エラー反映
 	// ---------------------------------------------
 	insertHoneypotField(formNode, formConfig)
+	prepareAttachmentForm(formNode, formConfig)
 	restoreFormValues(formNode, fieldValues)
 
 	if formErrors.HasErrors() {
@@ -169,6 +170,19 @@ func insertHoneypotField(formNode *html.Node, formConfig config.FormConfig) {
 	}
 
 	formNode.InsertBefore(honeypotNode, formNode.FirstChild)
+}
+
+/**
+ * 添付フォーム属性補完。
+ *
+ * 添付項目が設定されているフォームへmultipart属性を追加する処理。
+ */
+func prepareAttachmentForm(formNode *html.Node, formConfig config.FormConfig) {
+	if len(formConfig.AttachFields) == 0 {
+		return
+	}
+
+	setAttribute(formNode, "enctype", "multipart/form-data")
 }
 
 /**

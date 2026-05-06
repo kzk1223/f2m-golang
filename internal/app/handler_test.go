@@ -4,7 +4,9 @@ package app
 // 実行方法: go test ./internal/app
 
 import (
+	"bytes"
 	"encoding/csv"
+	"mime/multipart"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -184,7 +186,7 @@ func TestHandlerSendsMailOnSend(t *testing.T) {
 	configSet := newTestConfigSet(t)
 	templateDir := t.TempDir()
 	mailTemplatePath := writeTestTemplate(t, templateDir, "mail.txt", `MAIL{{range .Fields}} {{.Name}}={{.Value}}{{end}}`)
-	replyTemplatePath := writeTestTemplate(t, templateDir, "reply.txt", `REPLY {{.First "name"}}`)
+	replyTemplatePath := writeTestTemplate(t, templateDir, "reply.txt", `REPLY {{.First "name"}}{{range .Fields}} {{.Name}}={{.Value}}{{end}}`)
 
 	formConfig := configSet.Forms["contact"]
 	formConfig.From = "form@example.com"
@@ -226,6 +228,134 @@ func TestHandlerSendsMailOnSend(t *testing.T) {
 	}
 	assertAppMailMessage(t, mailSender.messages[0], []string{"admin@example.com"}, "お問い合わせ", "contact=メール送信テスト", "送信元IP: 203.0.113.10", "X-Forwarded-For: 198.51.100.1, 198.51.100.2", "X-Real-IP: 198.51.100.1")
 	assertAppMailMessage(t, mailSender.messages[1], []string{"taro@example.com"}, "自動返信", "REPLY 山田太郎")
+}
+
+/**
+ * 添付ファイル付き送信の確認。
+ *
+ * 確認画面で署名した添付ファイルが管理者通知メールにのみ付与されることを検証する。
+ */
+func TestHandlerSendsAdminMailWithAttachment(t *testing.T) {
+	configSet := newTestConfigSet(t)
+	templateDir := t.TempDir()
+	mailTemplatePath := writeTestTemplate(t, templateDir, "mail.txt", `MAIL{{range .Fields}} {{.Name}}={{.Value}}{{end}}`)
+	replyTemplatePath := writeTestTemplate(t, templateDir, "reply.txt", `REPLY {{.First "name"}}{{range .Fields}} {{.Name}}={{.Value}}{{end}}`)
+
+	formConfig := configSet.Forms["contact"]
+	formConfig.From = "form@example.com"
+	formConfig.To = []string{"admin@example.com"}
+	formConfig.MailTemplate = mailTemplatePath
+	formConfig.ReplyToField = "mail"
+	formConfig.ReplySubject = "自動返信"
+	formConfig.ReplyTemplate = replyTemplatePath
+	formConfig.AttachFields = []string{"attachment"}
+	formConfig.FieldLabels["attachment"] = "添付ファイル"
+	configSet.Forms["contact"] = formConfig
+
+	mailSender := &fakeMailSender{}
+	handler := newWithMailSender(configSet, mailSender)
+
+	confirmResponse := performMultipartRequest(handler, "/", url.Values{
+		"F2M_ID":  {"contact"},
+		"name":    {"山田太郎"},
+		"mail":    {"taro@example.com"},
+		"mail2":   {"taro@example.com"},
+		"contact": {"添付送信テスト"},
+	}, []multipartTestFile{
+		{FieldName: "attachment", FileName: "document.txt", Content: []byte("hello")},
+	})
+	assertResponseContains(
+		t,
+		confirmResponse,
+		http.StatusOK,
+		"添付ファイル",
+		"document.txt",
+		`name="f2m_attachment_id"`,
+	)
+	submitToken := extractSubmitToken(t, confirmResponse)
+	attachmentID := extractAttachmentID(t, confirmResponse)
+
+	response := performRequest(handler, http.MethodPost, "/", url.Values{
+		"F2M_ID":            {"contact"},
+		"mode":              {"send"},
+		"f2m_submit_token":  {submitToken},
+		"f2m_attachment_id": {attachmentID},
+		"name":              {"山田太郎"},
+		"mail":              {"taro@example.com"},
+		"mail2":             {"taro@example.com"},
+		"contact":           {"添付送信テスト"},
+	})
+
+	assertResponse(t, response, http.StatusOK, "THANKS お問い合わせ")
+	if len(mailSender.messages) != 2 {
+		t.Fatalf("mail messages length = %d, want 2", len(mailSender.messages))
+	}
+	if len(mailSender.messages[0].Attachments) != 1 {
+		t.Fatalf("admin attachments length = %d, want 1", len(mailSender.messages[0].Attachments))
+	}
+	if mailSender.messages[0].Attachments[0].OriginalName != "document.txt" {
+		t.Fatalf("attachment name = %q", mailSender.messages[0].Attachments[0].OriginalName)
+	}
+	assertAppMailMessage(t, mailSender.messages[0], []string{"admin@example.com"}, "お問い合わせ", "attachment=document.txt")
+	assertAppMailMessage(t, mailSender.messages[1], []string{"taro@example.com"}, "自動返信", "attachment=document.txt")
+	if len(mailSender.messages[1].Attachments) != 0 {
+		t.Fatalf("reply attachments length = %d, want 0", len(mailSender.messages[1].Attachments))
+	}
+	if _, err := os.Stat(mailSender.messages[0].Attachments[0].StoredPath); !os.IsNotExist(err) {
+		t.Fatalf("stored attachment still exists or stat failed unexpectedly: %v", err)
+	}
+}
+
+/**
+ * 添付ファイル容量超過の確認。
+ *
+ * multipart本文上限より手前の添付容量超過がフォームエラーとして表示されることを検証する。
+ */
+func TestHandlerRendersAttachmentSizeError(t *testing.T) {
+	configSet := newTestConfigSet(t)
+	templateDir := t.TempDir()
+	formPath := writeTestTemplate(t, templateDir, "attachment_form.html", `
+<!doctype html>
+<html lang="ja">
+<body>
+<form method="post" action="/" enctype="multipart/form-data">
+<input type="hidden" name="F2M_ID" value="contact">
+<input name="name">
+<input name="mail">
+<input name="mail2">
+<textarea name="contact"></textarea>
+<input type="file" name="attachment">
+</form>
+</body>
+</html>
+`)
+
+	formConfig := configSet.Forms["contact"]
+	formConfig.FormPath = formPath
+	formConfig.AttachFields = []string{"attachment"}
+	formConfig.FieldLabels["attachment"] = "添付ファイル"
+	formConfig.AttachMax = "3M"
+	configSet.Forms["contact"] = formConfig
+	handler := New(configSet)
+
+	response := performMultipartRequest(handler, "/", url.Values{
+		"F2M_ID":  {"contact"},
+		"name":    {"山田太郎"},
+		"mail":    {"taro@example.com"},
+		"mail2":   {"taro@example.com"},
+		"contact": {"容量超過テスト"},
+	}, []multipartTestFile{
+		{FieldName: "attachment", FileName: "large.txt", Content: bytes.Repeat([]byte("a"), 4*1024*1024)},
+	})
+
+	assertResponseContains(
+		t,
+		response,
+		http.StatusOK,
+		`class="f2m-error-summary"`,
+		"添付ファイル: ファイルサイズが上限を超えています。",
+		`data-f2m-error-for="attachment"`,
+	)
 }
 
 /**
@@ -403,6 +533,51 @@ func TestHandlerRejectsUnknownF2MID(t *testing.T) {
 }
 
 /**
+ * multipart本文下限の確認。
+ *
+ * 通常の添付上限ではHTTP本文上限に128MiBの下限が使われることを検証する。
+ */
+func TestMultipartBodyLimitUsesMinimumLimit(t *testing.T) {
+	handler := &Handler{
+		configSet: &config.ConfigSet{
+			Forms: map[string]config.FormConfig{
+				"contact": {
+					AttachMax:    "3M",
+					AttachFields: []string{"attachment"},
+				},
+			},
+		},
+	}
+
+	if actualLimit := handler.multipartBodyLimit(); actualLimit != multipartRequestMinLimit {
+		t.Fatalf("multipart body limit = %d, want %d", actualLimit, multipartRequestMinLimit)
+	}
+}
+
+/**
+ * multipart本文上限の拡張確認。
+ *
+ * 大きな添付上限では設定容量の150%に余白を加えた値が使われることを検証する。
+ */
+func TestMultipartBodyLimitScalesLargeAttachMax(t *testing.T) {
+	handler := &Handler{
+		configSet: &config.ConfigSet{
+			Forms: map[string]config.FormConfig{
+				"contact": {
+					AttachMax:    "100M",
+					AttachFields: []string{"attachment"},
+				},
+			},
+		},
+	}
+	expectedLimit := int64(100*1024*1024)*multipartLimitNumerator/multipartLimitDenominator + multipartRequestOverhead
+
+	if actualLimit := handler.multipartBodyLimit(); actualLimit != expectedLimit {
+		t.Fatalf("multipart body limit = %d, want %d", actualLimit, expectedLimit)
+	}
+}
+
+/**
  * テスト用設定集合生成。
  *
  * 一時テンプレートを持つ設定集合を返す処理。
@@ -441,7 +616,7 @@ func newTestConfigSet(t *testing.T) *config.ConfigSet {
 </body>
 </html>
 `)
-	writeTestTemplate(t, templateDir, "confirm.html", `CONFIRM{{range .Fields}} {{.Name}}={{.Value}}{{end}} <input type="hidden" name="f2m_submit_token" value="{{.SubmitToken}}">{{range .Fields}}{{$field := .}}{{range .Values}}<input type="hidden" name="{{$field.Name}}" value="{{.}}">{{end}}{{end}}`)
+	writeTestTemplate(t, templateDir, "confirm.html", `CONFIRM{{range .Fields}} {{.Name}}={{.Value}}{{end}}{{range .Attachments}} {{.Label}}={{.Name}} {{.SizeText}}<input type="hidden" name="f2m_attachment_id" value="{{.ID}}">{{end}} <input type="hidden" name="f2m_submit_token" value="{{.SubmitToken}}">{{range .Fields}}{{$field := .}}{{range .Values}}<input type="hidden" name="{{$field.Name}}" value="{{.}}">{{end}}{{end}}`)
 	writeTestTemplate(t, templateDir, "thanks.html", `THANKS {{.Title}}`)
 
 	return &config.ConfigSet{
@@ -512,6 +687,44 @@ func performRequest(handler http.Handler, method string, path string, formValues
 }
 
 /**
+ * テスト用multipartリクエスト実行。
+ *
+ * url.Valuesと添付ファイルをmultipart/form-dataとして送信する処理。
+ */
+func performMultipartRequest(handler http.Handler, path string, formValues url.Values, testFiles []multipartTestFile) *httptest.ResponseRecorder {
+	var requestBody bytes.Buffer
+	multipartWriter := multipart.NewWriter(&requestBody)
+
+	for fieldName, fieldValueList := range formValues {
+		for _, fieldValue := range fieldValueList {
+			if err := multipartWriter.WriteField(fieldName, fieldValue); err != nil {
+				panic(err)
+			}
+		}
+	}
+	for _, testFile := range testFiles {
+		fileWriter, err := multipartWriter.CreateFormFile(testFile.FieldName, testFile.FileName)
+		if err != nil {
+			panic(err)
+		}
+		if _, err := fileWriter.Write(testFile.Content); err != nil {
+			panic(err)
+		}
+	}
+	if err := multipartWriter.Close(); err != nil {
+		panic(err)
+	}
+
+	request := httptest.NewRequest(http.MethodPost, path, &requestBody)
+	request.Header.Set("Content-Type", multipartWriter.FormDataContentType())
+
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+
+	return response
+}
+
+/**
  * テスト用HTTPリクエスト実行。
  *
  * 接続元情報とHTTPヘッダーを指定してフォームPOSTを送信する処理。
@@ -541,6 +754,17 @@ func performRequestWithMeta(handler http.Handler, method string, path string, fo
 	handler.ServeHTTP(response, request)
 
 	return response
+}
+
+/**
+ * テスト用添付ファイル。
+ *
+ * multipartリクエストへ追加するファイル情報。
+ */
+type multipartTestFile struct {
+	FieldName string
+	FileName  string
+	Content   []byte
 }
 
 /**
@@ -595,6 +819,30 @@ func extractSubmitToken(t *testing.T, response *httptest.ResponseRecorder) strin
 	}
 
 	return body[tokenStart : tokenStart+tokenEnd]
+}
+
+/**
+ * 添付ID抽出。
+ *
+ * 確認画面HTMLからhiddenの添付IDを取り出す処理。
+ */
+func extractAttachmentID(t *testing.T, response *httptest.ResponseRecorder) string {
+	t.Helper()
+
+	attachmentPrefix := `name="f2m_attachment_id" value="`
+	body := response.Body.String()
+	attachmentStart := strings.Index(body, attachmentPrefix)
+	if attachmentStart < 0 {
+		t.Fatalf("body = %q, want attachment id", body)
+	}
+
+	attachmentStart += len(attachmentPrefix)
+	attachmentEnd := strings.Index(body[attachmentStart:], `"`)
+	if attachmentEnd < 0 {
+		t.Fatalf("body = %q, want attachment id closing quote", body)
+	}
+
+	return body[attachmentStart : attachmentStart+attachmentEnd]
 }
 
 /**

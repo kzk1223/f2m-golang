@@ -94,6 +94,12 @@ button {
 				<dd>{{.Value}}</dd>
 			</div>
 			{{end}}
+			{{range .Attachments}}
+			<div class="confirm-item">
+				<dt>{{if .Label}}{{.Label}}{{else}}{{.FieldName}}{{end}}</dt>
+				<dd>{{.Name}}（{{.SizeText}}）</dd>
+			</div>
+			{{end}}
 		</dl>
 		<form method="post" action="/">
 			<input type="hidden" name="F2M_ID" value="{{.FormID}}">
@@ -103,6 +109,9 @@ button {
 			{{range .Values}}
 			<input type="hidden" name="{{$field.Name}}" value="{{.}}">
 			{{end}}
+			{{end}}
+			{{range .Attachments}}
+			<input type="hidden" name="f2m_attachment_id" value="{{.ID}}">
 			{{end}}
 			<div class="actions">
 				<button class="button-back" type="submit" name="mode" value="form">戻る</button>

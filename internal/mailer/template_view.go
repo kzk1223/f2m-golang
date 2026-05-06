@@ -3,6 +3,7 @@ package mailer
 import (
 	"strings"
 
+	"f2m-golang/internal/attachment"
 	"f2m-golang/internal/config"
 )
 
@@ -56,21 +57,24 @@ func (view TemplateView) Joined(fieldName string) string {
 /**
  * メールテンプレート表示データ生成。
  *
- * 設定上の項目順に入力値を整形する処理。
+ * 設定上の項目順に入力値と添付ファイル名を整形する処理。
  */
-func newTemplateView(formConfig config.FormConfig, fieldValues map[string][]string) TemplateView {
-	fields := make([]FieldView, 0, len(formConfig.FieldOrder))
-	for _, fieldName := range formConfig.FieldOrder {
+func newTemplateView(formConfig config.FormConfig, fieldValues map[string][]string, attachmentFiles []attachment.File) TemplateView {
+	fieldOrder := mailFieldOrder(formConfig)
+	templateValues := mailTemplateValues(fieldValues, attachmentFiles)
+	fields := make([]FieldView, 0, len(fieldOrder))
+	for _, fieldName := range fieldOrder {
 		label := formConfig.FieldLabels[fieldName]
 		if label == "" {
 			label = fieldName
 		}
+		values := templateValues[fieldName]
 
 		fields = append(fields, FieldView{
 			Name:   fieldName,
 			Label:  label,
-			Value:  joinFieldValues(fieldValues[fieldName]),
-			Values: cloneValues(fieldValues[fieldName]),
+			Value:  joinFieldValues(values),
+			Values: cloneValues(values),
 		})
 	}
 
@@ -78,8 +82,56 @@ func newTemplateView(formConfig config.FormConfig, fieldValues map[string][]stri
 		FormID:  formConfig.ID,
 		Subject: formConfig.Subject,
 		Fields:  fields,
-		Values:  cloneFieldValues(fieldValues),
+		Values:  templateValues,
 	}
+}
+
+/**
+ * メール項目順序生成。
+ *
+ * F2M_JPNAMEの順序に添付項目を追加した表示順を生成する処理。
+ */
+func mailFieldOrder(formConfig config.FormConfig) []string {
+	fieldOrder := make([]string, 0, len(formConfig.FieldOrder)+len(formConfig.AttachFields))
+	seen := make(map[string]bool)
+
+	appendFieldName := func(fieldName string) {
+		fieldName = strings.TrimSpace(fieldName)
+		if fieldName == "" || seen[fieldName] {
+			return
+		}
+
+		fieldOrder = append(fieldOrder, fieldName)
+		seen[fieldName] = true
+	}
+
+	for _, fieldName := range formConfig.FieldOrder {
+		appendFieldName(fieldName)
+	}
+	for _, fieldName := range formConfig.AttachFields {
+		appendFieldName(fieldName)
+	}
+
+	return fieldOrder
+}
+
+/**
+ * メールテンプレート値生成。
+ *
+ * 通常入力値へ添付ファイル名を追加した値集合を生成する処理。
+ */
+func mailTemplateValues(fieldValues map[string][]string, attachmentFiles []attachment.File) map[string][]string {
+	templateValues := cloneFieldValues(fieldValues)
+	for _, attachmentFile := range attachmentFiles {
+		fieldName := strings.TrimSpace(attachmentFile.FieldName)
+		if fieldName == "" || strings.TrimSpace(attachmentFile.OriginalName) == "" {
+			continue
+		}
+
+		templateValues[fieldName] = append(templateValues[fieldName], attachmentFile.OriginalName)
+	}
+
+	return templateValues
 }
 
 /**

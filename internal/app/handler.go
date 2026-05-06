@@ -4,6 +4,7 @@ package app
 import (
 	"fmt"
 	"html/template"
+	"mime/multipart"
 	"net"
 	"net/http"
 	"path"
@@ -12,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"f2m-golang/internal/attachment"
 	"f2m-golang/internal/config"
 	"f2m-golang/internal/mailer"
 	"f2m-golang/internal/security"
@@ -19,8 +21,14 @@ import (
 )
 
 const (
-	submitTokenFieldName = "f2m_submit_token"
-	defaultTokenExpire   = 30 * time.Minute
+	submitTokenFieldName      = "f2m_submit_token"
+	attachmentTokenFieldName  = "f2m_attachment_id"
+	defaultTokenExpire        = 30 * time.Minute
+	defaultMultipartMemory    = 1 << 20
+	multipartRequestOverhead  = 1 << 20
+	multipartRequestMinLimit  = 128 << 20
+	multipartLimitNumerator   = 3
+	multipartLimitDenominator = 2
 )
 
 /**
@@ -32,6 +40,7 @@ type Handler struct {
 	configSet         *config.ConfigSet
 	mailService       *mailer.Service
 	submitTokenSigner *security.SubmitTokenSigner
+	attachmentStore   *attachment.Store
 }
 
 /**
@@ -67,6 +76,7 @@ func newHandler(configSet *config.ConfigSet, mailService *mailer.Service) http.H
 		configSet:         configSet,
 		mailService:       mailService,
 		submitTokenSigner: submitTokenSigner,
+		attachmentStore:   attachment.NewStore(""),
 	}
 }
 
@@ -130,16 +140,18 @@ func (handler *Handler) handlePost(w http.ResponseWriter, r *http.Request) {
 	// ---------------------------------------------
 	// フォーム値解析
 	// ---------------------------------------------
-	if err := r.ParseForm(); err != nil {
+	if err := handler.parsePostForm(w, r); err != nil {
 		http.Error(w, "invalid form", http.StatusBadRequest)
 		return
 	}
+	defer cleanupMultipartForm(r)
 
 	formConfig, ok := handler.findFormConfig(r)
 	if !ok {
 		http.Error(w, "invalid F2M_ID", http.StatusBadRequest)
 		return
 	}
+	_ = handler.attachmentStore.CleanupExpired(attachment.TempTTL(formConfig))
 
 	if honeypotFilled(r, formConfig) {
 		http.Error(w, "invalid request", http.StatusBadRequest)
@@ -155,14 +167,21 @@ func (handler *Handler) handlePost(w http.ResponseWriter, r *http.Request) {
 	case "form":
 		handler.renderForm(w, formConfig, fieldValues, FormErrors{})
 	case "send":
+		attachmentIDs := collectAttachmentIDs(r)
 		formErrors := validateFields(formConfig, fieldValues)
 		if formErrors.HasErrors() {
 			handler.renderForm(w, formConfig, fieldValues, formErrors)
 			return
 		}
 
-		if err := handler.verifySubmitToken(r, formConfig, fieldValues); err != nil {
+		if err := handler.verifySubmitToken(r, formConfig, fieldValues, attachmentIDs); err != nil {
 			http.Error(w, "invalid submit token", http.StatusBadRequest)
+			return
+		}
+
+		attachmentFiles, err := handler.attachmentStore.LoadMany(attachmentIDs, attachment.TempTTL(formConfig))
+		if err != nil {
+			http.Error(w, "invalid attachment", http.StatusBadRequest)
 			return
 		}
 
@@ -172,10 +191,11 @@ func (handler *Handler) handlePost(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		if err := handler.mailService.SendAll(formConfig, fieldValues, newMailSubmitMeta(submitMeta)); err != nil {
+		if err := handler.mailService.SendAll(formConfig, fieldValues, attachmentFiles, newMailSubmitMeta(submitMeta)); err != nil {
 			http.Error(w, "mail send error", http.StatusInternalServerError)
 			return
 		}
+		_ = handler.attachmentStore.DeleteMany(attachmentFiles)
 
 		handler.renderThanks(w, formConfig, fieldValues)
 	default:
@@ -185,7 +205,14 @@ func (handler *Handler) handlePost(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		handler.renderConfirm(w, formConfig, fieldValues)
+		attachmentFiles, attachmentErrors := handler.saveUploadedAttachments(r, formConfig)
+		if attachmentErrors.HasErrors() {
+			_ = handler.attachmentStore.DeleteMany(attachmentFiles)
+			handler.renderForm(w, formConfig, fieldValues, attachmentErrors)
+			return
+		}
+
+		handler.renderConfirm(w, formConfig, fieldValues, attachmentFiles)
 	}
 }
 
@@ -210,9 +237,9 @@ func (handler *Handler) renderForm(w http.ResponseWriter, formConfig config.Form
  *
  * 確認テンプレートへ画面表示用データを渡す処理。
  */
-func (handler *Handler) renderConfirm(w http.ResponseWriter, formConfig config.FormConfig, fieldValues FieldValues) {
-	pageView := handler.newPageView(formConfig, fieldValues)
-	submitToken, err := handler.submitTokenSigner.Sign(formConfig.ID, fieldValues, tokenExpire(formConfig))
+func (handler *Handler) renderConfirm(w http.ResponseWriter, formConfig config.FormConfig, fieldValues FieldValues, attachmentFiles []attachment.File) {
+	pageView := handler.newPageView(formConfig, fieldValues, attachmentFiles)
+	submitToken, err := handler.submitTokenSigner.Sign(formConfig.ID, fieldValues, attachment.IDs(attachmentFiles), tokenExpire(formConfig))
 	if err != nil {
 		http.Error(w, "submit token error", http.StatusInternalServerError)
 		return
@@ -229,7 +256,7 @@ func (handler *Handler) renderConfirm(w http.ResponseWriter, formConfig config.F
  * 完了テンプレートへ画面表示用データを渡す処理。
  */
 func (handler *Handler) renderThanks(w http.ResponseWriter, formConfig config.FormConfig, fieldValues FieldValues) {
-	handler.render(w, formConfig.ThanksPath, handler.newPageView(formConfig, fieldValues))
+	handler.render(w, formConfig.ThanksPath, handler.newPageView(formConfig, fieldValues, nil))
 }
 
 /**
@@ -273,12 +300,167 @@ func (handler *Handler) collectFieldValues(r *http.Request, formConfig config.Fo
 }
 
 /**
+ * POSTフォーム解析。
+ *
+ * Content-Typeに応じて通常フォームまたはmultipartフォームを解析する処理。
+ */
+func (handler *Handler) parsePostForm(w http.ResponseWriter, r *http.Request) error {
+	if isMultipartForm(r) {
+		r.Body = http.MaxBytesReader(w, r.Body, handler.multipartBodyLimit())
+		return r.ParseMultipartForm(defaultMultipartMemory)
+	}
+
+	return r.ParseForm()
+}
+
+/**
  * 送信トークン検証。
  *
  * 確認画面で発行した署名付き送信トークンとPOST値の一致を検証する処理。
  */
-func (handler *Handler) verifySubmitToken(r *http.Request, formConfig config.FormConfig, fieldValues FieldValues) error {
-	return handler.submitTokenSigner.Verify(r.PostFormValue(submitTokenFieldName), formConfig.ID, fieldValues)
+func (handler *Handler) verifySubmitToken(r *http.Request, formConfig config.FormConfig, fieldValues FieldValues, attachmentIDs []string) error {
+	return handler.submitTokenSigner.Verify(r.PostFormValue(submitTokenFieldName), formConfig.ID, fieldValues, attachmentIDs)
+}
+
+/**
+ * multipartフォーム判定。
+ *
+ * リクエストがmultipart/form-dataかを返す処理。
+ */
+func isMultipartForm(r *http.Request) bool {
+	contentType := strings.ToLower(strings.TrimSpace(r.Header.Get("Content-Type")))
+
+	return strings.HasPrefix(contentType, "multipart/form-data")
+}
+
+/**
+ * multipart一時ファイル削除。
+ *
+ * net/httpが作成したmultipart一時ファイルを削除する処理。
+ */
+func cleanupMultipartForm(r *http.Request) {
+	if r.MultipartForm != nil {
+		_ = r.MultipartForm.RemoveAll()
+	}
+}
+
+/**
+ * multipart本文上限。
+ *
+ * 設定済み添付サイズからリクエスト本文上限を算出する処理。
+ */
+func (handler *Handler) multipartBodyLimit() int64 {
+	if handler == nil || handler.configSet == nil {
+		return multipartRequestMinLimit
+	}
+
+	bodyLimit := int64(multipartRequestMinLimit)
+	for _, formConfig := range handler.configSet.Forms {
+		formLimit := multipartBodyLimitForForm(formConfig)
+		if formLimit > bodyLimit {
+			bodyLimit = formLimit
+		}
+	}
+
+	return bodyLimit
+}
+
+/**
+ * フォーム別multipart本文上限。
+ *
+ * 添付許可サイズに対して十分な余白を持つHTTP本文上限を算出する処理。
+ */
+func multipartBodyLimitForForm(formConfig config.FormConfig) int64 {
+	maxBytes, err := attachment.MaxSizeBytes(formConfig.AttachMax)
+	if err != nil {
+		defaultMaxBytes, _ := attachment.MaxSizeBytes("")
+		maxBytes = defaultMaxBytes
+	}
+
+	fieldCount := len(attachment.FieldNames(formConfig))
+	if fieldCount == 0 {
+		fieldCount = 1
+	}
+
+	configuredLimit := maxBytes * int64(fieldCount)
+	scaledLimit := configuredLimit * multipartLimitNumerator / multipartLimitDenominator
+	formLimit := scaledLimit + multipartRequestOverhead
+	if formLimit < multipartRequestMinLimit {
+		return multipartRequestMinLimit
+	}
+
+	return formLimit
+}
+
+/**
+ * アップロード添付保存。
+ *
+ * multipartフォームから設定済み添付ファイルを一時保存する処理。
+ */
+func (handler *Handler) saveUploadedAttachments(r *http.Request, formConfig config.FormConfig) ([]attachment.File, FormErrors) {
+	formErrors := FormErrors{
+		Fields: make(map[string][]string),
+	}
+	if !attachment.Enabled(formConfig) || r.MultipartForm == nil {
+		return nil, formErrors
+	}
+
+	attachmentFiles := make([]attachment.File, 0)
+	for _, fieldName := range attachment.FieldNames(formConfig) {
+		fileHeaders := nonEmptyFileHeaders(r.MultipartForm.File[fieldName])
+		if len(fileHeaders) == 0 {
+			continue
+		}
+		if len(fileHeaders) > 1 {
+			formErrors.Add(fieldName, fmt.Sprintf("%sは1ファイルのみ添付してください。", fieldLabel(formConfig, fieldName)))
+			continue
+		}
+
+		attachmentFile, err := handler.attachmentStore.SaveUploaded(formConfig, fieldName, fileHeaders[0])
+		if err != nil {
+			formErrors.Add(fieldName, fmt.Sprintf("%s: %s", fieldLabel(formConfig, fieldName), err.Error()))
+			continue
+		}
+
+		attachmentFiles = append(attachmentFiles, attachmentFile)
+	}
+
+	return attachmentFiles, formErrors
+}
+
+/**
+ * 空ファイルヘッダー除外。
+ *
+ * 未選択file input由来の空ファイルを除外する処理。
+ */
+func nonEmptyFileHeaders(fileHeaders []*multipart.FileHeader) []*multipart.FileHeader {
+	nonEmptyHeaders := make([]*multipart.FileHeader, 0, len(fileHeaders))
+	for _, fileHeader := range fileHeaders {
+		if fileHeader == nil || strings.TrimSpace(fileHeader.Filename) == "" {
+			continue
+		}
+
+		nonEmptyHeaders = append(nonEmptyHeaders, fileHeader)
+	}
+
+	return nonEmptyHeaders
+}
+
+/**
+ * 添付ID収集。
+ *
+ * 確認画面からPOSTされた添付IDを順序付きで取得する処理。
+ */
+func collectAttachmentIDs(r *http.Request) []string {
+	attachmentIDs := make([]string, 0, len(r.PostForm[attachmentTokenFieldName]))
+	for _, attachmentID := range r.PostForm[attachmentTokenFieldName] {
+		attachmentID = strings.TrimSpace(attachmentID)
+		if attachmentID != "" {
+			attachmentIDs = append(attachmentIDs, attachmentID)
+		}
+	}
+
+	return attachmentIDs
 }
 
 /**
@@ -364,10 +546,11 @@ func tokenExpire(formConfig config.FormConfig) time.Duration {
 func configuredFieldNames(formConfig config.FormConfig) []string {
 	fieldNames := make([]string, 0)
 	seen := make(map[string]bool)
+	attachmentFields := attachmentFieldSet(formConfig)
 
 	appendFieldName := func(fieldName string) {
 		fieldName = strings.TrimSpace(fieldName)
-		if fieldName == "" || seen[fieldName] {
+		if fieldName == "" || seen[fieldName] || attachmentFields[fieldName] {
 			return
 		}
 
@@ -397,10 +580,15 @@ func configuredFieldNames(formConfig config.FormConfig) []string {
  *
  * テンプレートから扱いやすい表示用データへの変換処理。
  */
-func (handler *Handler) newPageView(formConfig config.FormConfig, fieldValues FieldValues) PageView {
+func (handler *Handler) newPageView(formConfig config.FormConfig, fieldValues FieldValues, attachmentFiles []attachment.File) PageView {
 	fields := make([]FieldView, 0, len(formConfig.FieldOrder))
+	attachmentFields := attachmentFieldSet(formConfig)
 
 	for _, fieldName := range formConfig.FieldOrder {
+		if attachmentFields[fieldName] {
+			continue
+		}
+
 		fields = append(fields, FieldView{
 			Name:      fieldName,
 			Label:     formConfig.FieldLabels[fieldName],
@@ -412,10 +600,47 @@ func (handler *Handler) newPageView(formConfig config.FormConfig, fieldValues Fi
 	}
 
 	return PageView{
-		FormID: formConfig.ID,
-		Title:  formConfig.Subject,
-		Fields: fields,
+		FormID:      formConfig.ID,
+		Title:       formConfig.Subject,
+		Fields:      fields,
+		Attachments: newAttachmentViews(formConfig, attachmentFiles),
 	}
+}
+
+/**
+ * 添付画面表示データ生成。
+ *
+ * 一時保存済み添付ファイルを確認画面用の値へ変換する処理。
+ */
+func newAttachmentViews(formConfig config.FormConfig, attachmentFiles []attachment.File) []AttachmentView {
+	attachmentViews := make([]AttachmentView, 0, len(attachmentFiles))
+	for _, attachmentFile := range attachmentFiles {
+		attachmentViews = append(attachmentViews, AttachmentView{
+			FieldName:   attachmentFile.FieldName,
+			Label:       fieldLabel(formConfig, attachmentFile.FieldName),
+			ID:          attachmentFile.ID,
+			Name:        attachmentFile.OriginalName,
+			Size:        attachmentFile.Size,
+			SizeText:    attachment.FormatSize(attachmentFile.Size),
+			ContentType: attachmentFile.ContentType,
+		})
+	}
+
+	return attachmentViews
+}
+
+/**
+ * 添付フィールド集合生成。
+ *
+ * 添付対象フィールドを通常入力値から除外するための集合を生成する処理。
+ */
+func attachmentFieldSet(formConfig config.FormConfig) map[string]bool {
+	attachmentFields := make(map[string]bool)
+	for _, fieldName := range attachment.FieldNames(formConfig) {
+		attachmentFields[fieldName] = true
+	}
+
+	return attachmentFields
 }
 
 /**
@@ -538,6 +763,7 @@ type PageView struct {
 	FormID      string
 	Title       string
 	Fields      []FieldView
+	Attachments []AttachmentView
 	SubmitToken string
 }
 
@@ -553,4 +779,19 @@ type FieldView struct {
 	Values    []string
 	Type      string
 	Multiline bool
+}
+
+/**
+ * 添付表示データ。
+ *
+ * テンプレートに渡す添付ファイル単位の値。
+ */
+type AttachmentView struct {
+	FieldName   string
+	Label       string
+	ID          string
+	Name        string
+	Size        int64
+	SizeText    string
+	ContentType string
 }

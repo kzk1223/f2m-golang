@@ -51,6 +51,16 @@ func (sender *GoMailSender) Send(formConfig config.FormConfig, message Message) 
 	}
 	goMailMessage.Subject(message.Subject)
 	goMailMessage.SetBodyString(gomail.TypeTextPlain, message.Body)
+	for _, attachmentFile := range message.Attachments {
+		fileOptions := []gomail.FileOption{
+			gomail.WithFileName(attachmentFile.OriginalName),
+		}
+		if strings.TrimSpace(attachmentFile.ContentType) != "" {
+			fileOptions = append(fileOptions, gomail.WithFileContentType(gomail.ContentType(attachmentFile.ContentType)))
+		}
+
+		goMailMessage.AttachFile(attachmentFile.StoredPath, fileOptions...)
+	}
 
 	if err := client.DialAndSend(goMailMessage); err != nil {
 		return fmt.Errorf("smtp send: %w", err)

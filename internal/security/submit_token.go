@@ -51,13 +51,14 @@ func NewSubmitTokenSigner() (*SubmitTokenSigner, error) {
 /**
  * 送信トークン生成。
  *
- * フォームID、入力値、有効期限を署名付き文字列へ変換する処理。
+ * フォームID、入力値、添付ID、有効期限を署名付き文字列へ変換する処理。
  */
-func (signer *SubmitTokenSigner) Sign(formID string, fieldValues map[string][]string, expiresIn time.Duration) (string, error) {
+func (signer *SubmitTokenSigner) Sign(formID string, fieldValues map[string][]string, attachmentIDs []string, expiresIn time.Duration) (string, error) {
 	claims := SubmitTokenClaims{
-		FormID:      formID,
-		FieldValues: cloneFieldValues(fieldValues),
-		ExpiresAt:   signer.now().Add(expiresIn).Unix(),
+		FormID:        formID,
+		FieldValues:   cloneFieldValues(fieldValues),
+		AttachmentIDs: cloneStringSlice(attachmentIDs),
+		ExpiresAt:     signer.now().Add(expiresIn).Unix(),
 	}
 
 	return signer.secureCookie.Encode(submitTokenName, claims)
@@ -66,9 +67,9 @@ func (signer *SubmitTokenSigner) Sign(formID string, fieldValues map[string][]st
 /**
  * 送信トークン検証。
  *
- * 改ざん、有効期限、フォームID、入力値の一致を検証する処理。
+ * 改ざん、有効期限、フォームID、入力値、添付IDの一致を検証する処理。
  */
-func (signer *SubmitTokenSigner) Verify(token string, formID string, fieldValues map[string][]string) error {
+func (signer *SubmitTokenSigner) Verify(token string, formID string, fieldValues map[string][]string, attachmentIDs []string) error {
 	var claims SubmitTokenClaims
 	if err := signer.secureCookie.Decode(submitTokenName, token, &claims); err != nil {
 		return errSubmitTokenInvalid
@@ -78,7 +79,9 @@ func (signer *SubmitTokenSigner) Verify(token string, formID string, fieldValues
 		return errSubmitTokenExpired
 	}
 
-	if claims.FormID != formID || !equalFieldValues(claims.FieldValues, fieldValues) {
+	if claims.FormID != formID ||
+		!equalFieldValues(claims.FieldValues, fieldValues) ||
+		!equalStringSlice(claims.AttachmentIDs, attachmentIDs) {
 		return errSubmitTokenInvalid
 	}
 
@@ -88,12 +91,13 @@ func (signer *SubmitTokenSigner) Verify(token string, formID string, fieldValues
 /**
  * 送信トークンクレーム。
  *
- * 確認画面で確定したフォームID、入力値、有効期限。
+ * 確認画面で確定したフォームID、入力値、添付ID、有効期限。
  */
 type SubmitTokenClaims struct {
-	FormID      string              `json:"form_id"`
-	FieldValues map[string][]string `json:"field_values"`
-	ExpiresAt   int64               `json:"expires_at"`
+	FormID        string              `json:"form_id"`
+	FieldValues   map[string][]string `json:"field_values"`
+	AttachmentIDs []string            `json:"attachment_ids"`
+	ExpiresAt     int64               `json:"expires_at"`
 }
 
 /**
@@ -110,6 +114,18 @@ func cloneFieldValues(fieldValues map[string][]string) map[string][]string {
 	}
 
 	return clonedFieldValues
+}
+
+/**
+ * 文字列スライス複製。
+ *
+ * 署名後の外部変更を避けるためのスライス複製処理。
+ */
+func cloneStringSlice(values []string) []string {
+	clonedValues := make([]string, len(values))
+	copy(clonedValues, values)
+
+	return clonedValues
 }
 
 /**
@@ -138,6 +154,25 @@ func equalFieldValues(leftFieldValues map[string][]string, rightFieldValues map[
  * 署名済み入力値と送信入力値の順序付き値が完全一致するかを返す処理。
  */
 func equalFieldValueSlice(leftValues []string, rightValues []string) bool {
+	if len(leftValues) != len(rightValues) {
+		return false
+	}
+
+	for valueIndex, leftValue := range leftValues {
+		if rightValues[valueIndex] != leftValue {
+			return false
+		}
+	}
+
+	return true
+}
+
+/**
+ * 文字列スライス一致判定。
+ *
+ * 署名済み値と送信値の順序付き文字列が完全一致するかを返す処理。
+ */
+func equalStringSlice(leftValues []string, rightValues []string) bool {
 	if len(leftValues) != len(rightValues) {
 		return false
 	}

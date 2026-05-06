@@ -9,6 +9,7 @@ import (
 	"text/template"
 	"time"
 
+	"f2m-golang/internal/attachment"
 	"f2m-golang/internal/config"
 )
 
@@ -31,11 +32,12 @@ type MessageType string
  * SMTP送信前に正規化されたメール内容。
  */
 type Message struct {
-	Type    MessageType
-	From    string
-	To      []string
-	Subject string
-	Body    string
+	Type        MessageType
+	From        string
+	To          []string
+	Subject     string
+	Body        string
+	Attachments []attachment.File
 }
 
 /**
@@ -84,7 +86,7 @@ func NewService(sender Sender) *Service {
  *
  * 設定されている管理者通知と自動返信を順番に送信する処理。
  */
-func (service *Service) SendAll(formConfig config.FormConfig, fieldValues map[string][]string, submitMeta SubmitMeta) error {
+func (service *Service) SendAll(formConfig config.FormConfig, fieldValues map[string][]string, attachmentFiles []attachment.File, submitMeta SubmitMeta) error {
 	if service == nil || service.sender == nil {
 		return nil
 	}
@@ -99,7 +101,7 @@ func (service *Service) SendAll(formConfig config.FormConfig, fieldValues map[st
 	// 管理者通知
 	// ---------------------------------------------
 	if hasAdminMail(formConfig) {
-		adminMessage, err := newAdminMessage(formConfig, fieldValues, submitMeta)
+		adminMessage, err := newAdminMessage(formConfig, fieldValues, attachmentFiles, submitMeta)
 		if err != nil {
 			return err
 		}
@@ -112,7 +114,7 @@ func (service *Service) SendAll(formConfig config.FormConfig, fieldValues map[st
 	// 自動返信
 	// ---------------------------------------------
 	if hasReplyMail(formConfig) {
-		replyMessage, err := newReplyMessage(formConfig, fieldValues)
+		replyMessage, err := newReplyMessage(formConfig, fieldValues, attachmentFiles)
 		if err != nil {
 			return err
 		}
@@ -131,14 +133,21 @@ func (service *Service) SendAll(formConfig config.FormConfig, fieldValues map[st
  *
  * F2M_TO宛ての通知メールを生成する処理。
  */
-func newAdminMessage(formConfig config.FormConfig, fieldValues map[string][]string, submitMeta SubmitMeta) (Message, error) {
-	body, err := renderMailBody(formConfig.MailTemplate, formConfig, fieldValues)
+func newAdminMessage(formConfig config.FormConfig, fieldValues map[string][]string, attachmentFiles []attachment.File, submitMeta SubmitMeta) (Message, error) {
+	body, err := renderMailBody(formConfig.MailTemplate, formConfig, fieldValues, attachmentFiles)
 	if err != nil {
 		return Message{}, fmt.Errorf("render admin mail: %w", err)
 	}
 	body = appendAdminSubmitMeta(body, submitMeta)
 
-	return newMessage(messageTypeAdmin, formConfig.From, formConfig.To, formConfig.Subject, body)
+	adminMessage, err := newMessage(messageTypeAdmin, formConfig.From, formConfig.To, formConfig.Subject, body)
+	if err != nil {
+		return Message{}, err
+	}
+
+	adminMessage.Attachments = attachmentFiles
+
+	return adminMessage, nil
 }
 
 /**
@@ -146,13 +155,13 @@ func newAdminMessage(formConfig config.FormConfig, fieldValues map[string][]stri
  *
  * F2M_RESV_TO_FLDで指定された入力値宛ての返信メールを生成する処理。
  */
-func newReplyMessage(formConfig config.FormConfig, fieldValues map[string][]string) (Message, error) {
+func newReplyMessage(formConfig config.FormConfig, fieldValues map[string][]string, attachmentFiles []attachment.File) (Message, error) {
 	replyTo := strings.TrimSpace(firstFieldValue(fieldValues, formConfig.ReplyToField))
 	if replyTo == "" {
 		return Message{Type: messageTypeReply}, nil
 	}
 
-	body, err := renderMailBody(formConfig.ReplyTemplate, formConfig, fieldValues)
+	body, err := renderMailBody(formConfig.ReplyTemplate, formConfig, fieldValues, attachmentFiles)
 	if err != nil {
 		return Message{}, fmt.Errorf("render reply mail: %w", err)
 	}
@@ -195,8 +204,8 @@ func newMessage(messageType MessageType, from string, recipients []string, subje
  *
  * text/templateでメール本文を生成する処理。
  */
-func renderMailBody(templatePath string, formConfig config.FormConfig, fieldValues map[string][]string) (string, error) {
-	view := newTemplateView(formConfig, fieldValues)
+func renderMailBody(templatePath string, formConfig config.FormConfig, fieldValues map[string][]string, attachmentFiles []attachment.File) (string, error) {
+	view := newTemplateView(formConfig, fieldValues, attachmentFiles)
 	if strings.TrimSpace(templatePath) == "" {
 		return defaultMailBody(view), nil
 	}

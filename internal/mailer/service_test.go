@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"f2m-golang/internal/attachment"
 	"f2m-golang/internal/config"
 )
 
@@ -30,11 +31,12 @@ func TestServiceSendsAdminAndReplyMessages(t *testing.T) {
 		To:            []string{"admin@example.com"},
 		Subject:       "管理者通知",
 		FieldOrder:    []string{"name", "mail", "interest"},
-		FieldLabels:   map[string]string{"name": "お名前", "mail": "メールアドレス", "interest": "興味のある内容"},
+		FieldLabels:   map[string]string{"name": "お名前", "mail": "メールアドレス", "interest": "興味のある内容", "attachment": "添付ファイル"},
 		ReplyToField:  "mail",
 		ReplySubject:  "自動返信",
 		ReplyTemplate: replyTemplatePath,
 		MailTemplate:  mailTemplatePath,
+		AttachFields:  []string{"attachment"},
 	}
 	fieldValues := map[string][]string{
 		"name":     {"山田太郎"},
@@ -47,18 +49,27 @@ func TestServiceSendsAdminAndReplyMessages(t *testing.T) {
 		XForwardedFor: "198.51.100.1, 198.51.100.2",
 		XRealIP:       "198.51.100.1",
 	}
+	attachmentFiles := []attachment.File{
+		{ID: "f2m_att_test", FieldName: "attachment", OriginalName: "document.txt", StoredPath: filepath.Join(templateDir, "document.txt"), Size: 5},
+	}
 	sender := &recordingSender{}
 	service := NewService(sender)
 
-	if err := service.SendAll(formConfig, fieldValues, submitMeta); err != nil {
+	if err := service.SendAll(formConfig, fieldValues, attachmentFiles, submitMeta); err != nil {
 		t.Fatal(err)
 	}
 
 	if len(sender.messages) != 2 {
 		t.Fatalf("messages length = %d, want 2", len(sender.messages))
 	}
-	assertMailerMessage(t, sender.messages[0], messageTypeAdmin, []string{"admin@example.com"}, "管理者通知", "興味のある内容=資料請求、見積依頼", "送信日時: 2026-05-06 01:02:03", "送信元IP: 203.0.113.10", "X-Forwarded-For: 198.51.100.1, 198.51.100.2", "X-Real-IP: 198.51.100.1")
-	assertMailerMessage(t, sender.messages[1], messageTypeReply, []string{"taro@example.com"}, "自動返信", "REPLY 山田太郎")
+	assertMailerMessage(t, sender.messages[0], messageTypeAdmin, []string{"admin@example.com"}, "管理者通知", "興味のある内容=資料請求、見積依頼", "添付ファイル=document.txt", "送信日時: 2026-05-06 01:02:03", "送信元IP: 203.0.113.10", "X-Forwarded-For: 198.51.100.1, 198.51.100.2", "X-Real-IP: 198.51.100.1")
+	assertMailerMessage(t, sender.messages[1], messageTypeReply, []string{"taro@example.com"}, "自動返信", "REPLY 山田太郎", "attachment=document.txt")
+	if len(sender.messages[0].Attachments) != 1 {
+		t.Fatalf("admin attachments length = %d, want 1", len(sender.messages[0].Attachments))
+	}
+	if len(sender.messages[1].Attachments) != 0 {
+		t.Fatalf("reply attachments length = %d, want 0", len(sender.messages[1].Attachments))
+	}
 	if strings.Contains(sender.messages[1].Body, "送信元IP") {
 		t.Fatalf("reply body = %q, want no submit meta", sender.messages[1].Body)
 	}
@@ -77,7 +88,7 @@ func TestServiceRejectsHeaderLineBreak(t *testing.T) {
 		Subject: "件名\r\nBcc: attacker@example.com",
 	}
 
-	err := service.SendAll(formConfig, map[string][]string{}, SubmitMeta{})
+	err := service.SendAll(formConfig, map[string][]string{}, nil, SubmitMeta{})
 	if err == nil {
 		t.Fatal("expected error")
 	}

@@ -167,6 +167,7 @@ func TestLoadFileSampleConfig(t *testing.T) {
 	t.Logf("ThanksPath = %s", formConfig.ThanksPath)
 	t.Logf("CSVPath = %s", formConfig.CSVPath)
 	t.Logf("CSVCharset = %s", formConfig.CSVCharset)
+	t.Logf("AttachFields = %v", formConfig.AttachFields)
 	t.Logf("TokenExpire = %s", formConfig.TokenExpire)
 	t.Logf("HoneypotEnabled = %t", formConfig.HoneypotEnabled)
 	t.Logf("HoneypotField = %s", formConfig.HoneypotField)
@@ -191,6 +192,9 @@ func TestLoadFileSampleConfig(t *testing.T) {
 	}
 	if formConfig.CSVCharset != "SJIS" {
 		t.Fatalf("CSVCharset = %q", formConfig.CSVCharset)
+	}
+	if len(formConfig.AttachFields) != 1 || formConfig.AttachFields[0] != "attachment" {
+		t.Fatalf("AttachFields = %#v", formConfig.AttachFields)
 	}
 	if !formConfig.HoneypotEnabled {
 		t.Fatal("HoneypotEnabled is false")

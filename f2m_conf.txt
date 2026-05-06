@@ -10,7 +10,7 @@ F2M_SUBJECT : お問い合わせがありました
 # 入力チェック
 # ---------------------------------------------
 F2M_CHK : name,mail,mail2,gender,interest,contact
-F2M_JPNAME : name:お名前,mail:メールアドレス,mail2:メールアドレス確認用,gender:性別,interest:興味のある内容,contact:お問い合わせ内容
+F2M_JPNAME : name:お名前,mail:メールアドレス,mail2:メールアドレス確認用,gender:性別,interest:興味のある内容,contact:お問い合わせ内容,attachment:添付ファイル
 F2M_CHK_EMAIL : mail
 F2M_CHK_EQ : mail:mail2
 
@@ -28,6 +28,17 @@ F2M_FORM : ./form.html
 F2M_CONFIRM : ./templates/confirm.html
 F2M_THANKS : ./templates/thanks.html
 F2M_MAIL_TMPL : ./templates/mail.txt
+
+# ---------------------------------------------
+# 添付ファイル
+# ---------------------------------------------
+F2M_ATTACH_FLD : attachment
+# ※添付ファイルの容量許容値。未指定時は3M。
+# F2M_ATTACH_MAX : 10M
+# ※添付ファイルの許容拡張子。未指定時は制限なし。
+# F2M_ATTACH_EXT : jpg,jpeg,png,pdf
+# ※添付ファイルの許容MIME。未指定時は制限なし。
+# F2M_ATTACH_MIME : image/jpeg,image/png,application/pdf
 
 # ---------------------------------------------
 # メール送信
