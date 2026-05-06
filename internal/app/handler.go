@@ -6,6 +6,9 @@ import (
 	"html/template"
 	"net"
 	"net/http"
+	"path"
+	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -74,23 +77,48 @@ func newHandler(configSet *config.ConfigSet, mailService *mailer.Service) http.H
  */
 func (handler *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// ---------------------------------------------
-	// パス制御
+	// メソッド制御
 	// ---------------------------------------------
-	if r.URL.Path != "/" {
+	switch r.Method {
+	case http.MethodGet:
+		handler.handleGet(w, r)
+	case http.MethodPost:
+		if r.URL.Path != "/" {
+			http.NotFound(w, r)
+			return
+		}
+
+		handler.handlePost(w, r)
+	default:
+		w.Header().Set("Allow", "GET, POST")
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+/**
+ * フォームパス判定。
+ *
+ * リクエストパスが設定済みフォームHTMLに対応するかを返す処理。
+ */
+func HasFormPath(configSet *config.ConfigSet, requestPath string) bool {
+	_, ok := findFormConfigByPath(configSet, requestPath)
+
+	return ok
+}
+
+/**
+ * GETリクエスト処理。
+ *
+ * F2M_FORMに対応するフォームHTMLをアプリ側で描画する処理。
+ */
+func (handler *Handler) handleGet(w http.ResponseWriter, r *http.Request) {
+	formConfig, ok := findFormConfigByPath(handler.configSet, r.URL.Path)
+	if !ok {
 		http.NotFound(w, r)
 		return
 	}
 
-	// ---------------------------------------------
-	// メソッド制御
-	// ---------------------------------------------
-	switch r.Method {
-	case http.MethodPost:
-		handler.handlePost(w, r)
-	default:
-		w.Header().Set("Allow", http.MethodPost)
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-	}
+	handler.renderForm(w, formConfig, FieldValues{}, FormErrors{})
 }
 
 /**
@@ -110,6 +138,11 @@ func (handler *Handler) handlePost(w http.ResponseWriter, r *http.Request) {
 	formConfig, ok := handler.findFormConfig(r)
 	if !ok {
 		http.Error(w, "invalid F2M_ID", http.StatusBadRequest)
+		return
+	}
+
+	if honeypotFilled(r, formConfig) {
+		http.Error(w, "invalid request", http.StatusBadRequest)
 		return
 	}
 
@@ -249,6 +282,26 @@ func (handler *Handler) verifySubmitToken(r *http.Request, formConfig config.For
 }
 
 /**
+ * honeypot入力判定。
+ *
+ * bot検知用項目に空白以外の値がPOSTされたかを返す処理。
+ */
+func honeypotFilled(r *http.Request, formConfig config.FormConfig) bool {
+	honeypotField := strings.TrimSpace(formConfig.HoneypotField)
+	if !formConfig.HoneypotEnabled || honeypotField == "" {
+		return false
+	}
+
+	for _, fieldValue := range r.PostForm[honeypotField] {
+		if strings.TrimSpace(fieldValue) != "" {
+			return true
+		}
+	}
+
+	return false
+}
+
+/**
  * CSV送信メタ情報生成。
  *
  * HTTPリクエストからCSV保存用の送信日時と参考IP情報を生成する処理。
@@ -379,6 +432,74 @@ func (handler *Handler) findFormConfig(r *http.Request) (config.FormConfig, bool
 	formConfig, ok := handler.configSet.Forms[formID]
 
 	return formConfig, ok
+}
+
+/**
+ * フォームパス指定による設定選択。
+ *
+ * F2M_FORMの設定パスとリクエストパスを照合する処理。
+ */
+func findFormConfigByPath(configSet *config.ConfigSet, requestPath string) (config.FormConfig, bool) {
+	if configSet == nil {
+		return config.FormConfig{}, false
+	}
+
+	normalizedRequestPath := normalizeRequestPath(requestPath)
+	if normalizedRequestPath == "" {
+		return config.FormConfig{}, false
+	}
+
+	formIDs := make([]string, 0, len(configSet.Forms))
+	for formID := range configSet.Forms {
+		formIDs = append(formIDs, formID)
+	}
+	sort.Strings(formIDs)
+
+	for _, formID := range formIDs {
+		formConfig := configSet.Forms[formID]
+		if formPathRequestPath(formConfig.FormPath) == normalizedRequestPath {
+			return formConfig, true
+		}
+	}
+
+	return config.FormConfig{}, false
+}
+
+/**
+ * リクエストパス正規化。
+ *
+ * URLパスを先頭スラッシュ付きの比較用パスへ変換する処理。
+ */
+func normalizeRequestPath(requestPath string) string {
+	requestPath = strings.TrimSpace(requestPath)
+	if requestPath == "" {
+		return ""
+	}
+
+	return path.Clean("/" + strings.TrimPrefix(requestPath, "/"))
+}
+
+/**
+ * フォーム設定パス正規化。
+ *
+ * F2M_FORMのファイルパスをURL比較用パスへ変換する処理。
+ */
+func formPathRequestPath(formPath string) string {
+	trimmedFormPath := strings.TrimSpace(formPath)
+	var normalizedFormPath string
+	if filepath.IsAbs(trimmedFormPath) {
+		normalizedFormPath = filepath.Base(trimmedFormPath)
+	} else {
+		normalizedFormPath = filepath.ToSlash(trimmedFormPath)
+	}
+
+	normalizedFormPath = strings.TrimPrefix(normalizedFormPath, "./")
+	normalizedFormPath = strings.TrimPrefix(normalizedFormPath, "/")
+	if normalizedFormPath == "" || normalizedFormPath == "." {
+		return ""
+	}
+
+	return path.Clean("/" + normalizedFormPath)
 }
 
 /**

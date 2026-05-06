@@ -24,7 +24,7 @@ func main() {
 		log.Fatal(err)
 	}
 
-	mux := newServerMux(".", app.New(configSet))
+	mux := newServerMux(".", configSet)
 
 	log.Printf("start server: http://%s", serverAddress)
 
@@ -38,15 +38,16 @@ func main() {
  *
  * GETを静的配信へ、POST / をフォーム処理へ振り分ける処理。
  */
-func newServerMux(documentRoot string, formHandler http.Handler) http.Handler {
+func newServerMux(documentRoot string, configSet *config.ConfigSet) http.Handler {
 	mux := http.NewServeMux()
 	fileServer := http.FileServer(http.Dir(documentRoot))
+	formHandler := app.New(configSet)
 
 	// ---------------------------------------------
 	// ルーティング
 	// ---------------------------------------------
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodPost && r.URL.Path == "/" {
+		if shouldHandleByApp(configSet, r) {
 			formHandler.ServeHTTP(w, r)
 			return
 		}
@@ -55,4 +56,17 @@ func newServerMux(documentRoot string, formHandler http.Handler) http.Handler {
 	})
 
 	return mux
+}
+
+/**
+ * アプリ側処理判定。
+ *
+ * POST送信とF2M_FORM対象GETをフォーム画面制御へ渡すかを返す処理。
+ */
+func shouldHandleByApp(configSet *config.ConfigSet, r *http.Request) bool {
+	if r.Method == http.MethodPost && r.URL.Path == "/" {
+		return true
+	}
+
+	return r.Method == http.MethodGet && app.HasFormPath(configSet, r.URL.Path)
 }

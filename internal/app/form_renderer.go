@@ -34,6 +34,7 @@ func renderFixedFormFile(templatePath string, formConfig config.FormConfig, fiel
 	// ---------------------------------------------
 	// 入力値・エラー反映
 	// ---------------------------------------------
+	insertHoneypotField(formNode, formConfig)
 	restoreFormValues(formNode, fieldValues)
 
 	if formErrors.HasErrors() {
@@ -131,6 +132,43 @@ func restoreFormValues(formNode *html.Node, fieldValues FieldValues) {
 
 		return true
 	})
+}
+
+/**
+ * honeypot項目挿入。
+ *
+ * bot検知用の非表示入力項目を対象フォーム内へ追加する処理。
+ */
+func insertHoneypotField(formNode *html.Node, formConfig config.FormConfig) {
+	honeypotField := strings.TrimSpace(formConfig.HoneypotField)
+	if !formConfig.HoneypotEnabled || honeypotField == "" {
+		return
+	}
+
+	honeypotNode := newElementNode(
+		"div",
+		html.Attribute{Key: "class", Val: "f2m-honeypot"},
+		html.Attribute{Key: "aria-hidden", Val: "true"},
+		html.Attribute{Key: "style", Val: "position:absolute;left:-10000px;top:auto;width:1px;height:1px;overflow:hidden;"},
+	)
+	honeypotNode.AppendChild(newElementNode("label", html.Attribute{Key: "for", Val: honeypotField}))
+	honeypotNode.LastChild.AppendChild(newTextNode("Webサイト"))
+	honeypotNode.AppendChild(newElementNode(
+		"input",
+		html.Attribute{Key: "id", Val: honeypotField},
+		html.Attribute{Key: "type", Val: "text"},
+		html.Attribute{Key: "name", Val: honeypotField},
+		html.Attribute{Key: "value", Val: ""},
+		html.Attribute{Key: "tabindex", Val: "-1"},
+		html.Attribute{Key: "autocomplete", Val: "off"},
+	))
+
+	if formNode.FirstChild == nil {
+		formNode.AppendChild(honeypotNode)
+		return
+	}
+
+	formNode.InsertBefore(honeypotNode, formNode.FirstChild)
 }
 
 /**

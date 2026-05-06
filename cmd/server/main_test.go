@@ -9,7 +9,6 @@ import (
 	"strings"
 	"testing"
 
-	"f2m-golang/internal/app"
 	"f2m-golang/internal/config"
 )
 
@@ -35,21 +34,24 @@ func TestServerRouting(t *testing.T) {
 `)
 	writeServerTestFile(t, documentRoot, "confirm.html", `CONFIRM{{range .Fields}} {{.Name}}={{.Value}}{{end}}`)
 
-	mux := newServerMux(documentRoot, app.New(&config.ConfigSet{
+	configSet := &config.ConfigSet{
 		Forms: map[string]config.FormConfig{
 			"contact": {
-				ID:          "contact",
-				Subject:     "お問い合わせ",
-				FieldOrder:  []string{"name", "mail", "contact"},
-				FieldLabels: map[string]string{"name": "お名前", "mail": "メールアドレス", "contact": "お問い合わせ内容"},
-				FormPath:    filepath.Join(documentRoot, "form.html"),
-				ConfirmPath: filepath.Join(documentRoot, "confirm.html"),
+				ID:              "contact",
+				Subject:         "お問い合わせ",
+				FieldOrder:      []string{"name", "mail", "contact"},
+				FieldLabels:     map[string]string{"name": "お名前", "mail": "メールアドレス", "contact": "お問い合わせ内容"},
+				FormPath:        filepath.Join(documentRoot, "form.html"),
+				ConfirmPath:     filepath.Join(documentRoot, "confirm.html"),
+				HoneypotEnabled: true,
+				HoneypotField:   "f2m_hp_contact",
 			},
 		},
-	}))
+	}
+	mux := newServerMux(documentRoot, configSet)
 
 	getResponse := performServerRequest(mux, http.MethodGet, "/form.html", nil)
-	assertServerResponseContains(t, getResponse, http.StatusOK, `name="F2M_ID"`, `name="contact"`)
+	assertServerResponseContains(t, getResponse, http.StatusOK, `name="F2M_ID"`, `name="contact"`, `name="f2m_hp_contact"`)
 
 	postResponse := performServerRequest(mux, http.MethodPost, "/", url.Values{
 		"F2M_ID":  {"contact"},
@@ -69,9 +71,7 @@ func TestServerRoutesGetRootToStaticFile(t *testing.T) {
 	documentRoot := t.TempDir()
 	writeServerTestFile(t, documentRoot, "index.html", `STATIC INDEX`)
 
-	mux := newServerMux(documentRoot, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		http.Error(w, "form handler called", http.StatusInternalServerError)
-	}))
+	mux := newServerMux(documentRoot, &config.ConfigSet{Forms: map[string]config.FormConfig{}})
 
 	response := performServerRequest(mux, http.MethodGet, "/", nil)
 

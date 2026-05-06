@@ -116,6 +116,26 @@ func TestHandlerRejectsTamperedSendValues(t *testing.T) {
 }
 
 /**
+ * honeypot入力の拒否確認。
+ *
+ * bot検知用項目に値が入っているPOSTが拒否されることを検証する。
+ */
+func TestHandlerRejectsFilledHoneypot(t *testing.T) {
+	handler := New(newTestConfigSet(t))
+
+	response := performRequest(handler, http.MethodPost, "/", url.Values{
+		"F2M_ID":         {"contact"},
+		"f2m_hp_contact": {"https://example.com"},
+		"name":           {"山田太郎"},
+		"mail":           {"taro@example.com"},
+		"mail2":          {"taro@example.com"},
+		"contact":        {"確認テスト"},
+	})
+
+	assertResponse(t, response, http.StatusBadRequest, "invalid request")
+}
+
+/**
  * CSV保存付き送信の確認。
  *
  * mode=send成功時に設定されたCSVへ送信内容が保存されることを検証する。
@@ -261,16 +281,36 @@ func TestHandlerHandlesRadioAndCheckboxValues(t *testing.T) {
 }
 
 /**
- * GETリクエスト拒否の確認。
+ * 設定フォームGET描画の確認。
  *
- * フォーム処理handlerがPOST専用であることを検証する。
+ * F2M_FORMのパスで入力フォームがアプリ側描画されることを検証する。
  */
-func TestHandlerRejectsGetRequest(t *testing.T) {
+func TestHandlerRendersConfiguredFormPath(t *testing.T) {
 	handler := New(newTestConfigSet(t))
 
-	response := performRequest(handler, http.MethodGet, "/", nil)
+	response := performRequest(handler, http.MethodGet, "/form.html", nil)
 
-	assertResponse(t, response, http.StatusMethodNotAllowed, "method not allowed")
+	assertResponseContains(
+		t,
+		response,
+		http.StatusOK,
+		`name="F2M_ID"`,
+		`name="f2m_hp_contact"`,
+		`class="f2m-honeypot"`,
+	)
+}
+
+/**
+ * 未設定GETパスの確認。
+ *
+ * F2M_FORMにないパスがアプリ側で404になることを検証する。
+ */
+func TestHandlerReturnsNotFoundForUnknownGetPath(t *testing.T) {
+	handler := New(newTestConfigSet(t))
+
+	response := performRequest(handler, http.MethodGet, "/unknown.html", nil)
+
+	assertResponse(t, response, http.StatusNotFound, "404 page not found")
 }
 
 /**
@@ -407,16 +447,18 @@ func newTestConfigSet(t *testing.T) *config.ConfigSet {
 	return &config.ConfigSet{
 		Forms: map[string]config.FormConfig{
 			"contact": {
-				ID:             "contact",
-				Subject:        "お問い合わせ",
-				FieldOrder:     []string{"name", "mail", "mail2", "contact"},
-				FieldLabels:    map[string]string{"name": "お名前", "mail": "メールアドレス", "mail2": "メールアドレス確認用", "contact": "お問い合わせ内容"},
-				EmailFields:    map[string]bool{"mail": true},
-				EqualFields:    []config.EqualField{{Left: "mail", Right: "mail2"}},
-				FormPath:       filepath.Join(templateDir, "form.html"),
-				ConfirmPath:    filepath.Join(templateDir, "confirm.html"),
-				ThanksPath:     filepath.Join(templateDir, "thanks.html"),
-				RequiredFields: map[string]bool{"name": true, "mail": true, "mail2": true, "contact": true},
+				ID:              "contact",
+				Subject:         "お問い合わせ",
+				FieldOrder:      []string{"name", "mail", "mail2", "contact"},
+				FieldLabels:     map[string]string{"name": "お名前", "mail": "メールアドレス", "mail2": "メールアドレス確認用", "contact": "お問い合わせ内容"},
+				EmailFields:     map[string]bool{"mail": true},
+				EqualFields:     []config.EqualField{{Left: "mail", Right: "mail2"}},
+				FormPath:        filepath.Join(templateDir, "form.html"),
+				ConfirmPath:     filepath.Join(templateDir, "confirm.html"),
+				ThanksPath:      filepath.Join(templateDir, "thanks.html"),
+				RequiredFields:  map[string]bool{"name": true, "mail": true, "mail2": true, "contact": true},
+				HoneypotEnabled: true,
+				HoneypotField:   "f2m_hp_contact",
 			},
 			"recruit": {
 				ID:             "recruit",

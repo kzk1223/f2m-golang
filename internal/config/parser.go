@@ -5,6 +5,8 @@ package config
 
 import (
 	"bufio"
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"regexp"
 	"strings"
@@ -212,7 +214,15 @@ func applyValue(formConfig *FormConfig, key string, value string) error {
 		}
 		formConfig.TokenExpire = tokenExpire
 	case "F2M_HONEYPOT":
-		formConfig.HoneypotField = value
+		if honeypotEnabled(value) {
+			honeypotField, err := newHoneypotFieldName()
+			if err != nil {
+				return fmt.Errorf("F2M_HONEYPOT のフィールド名生成に失敗しました: %w", err)
+			}
+
+			formConfig.HoneypotEnabled = true
+			formConfig.HoneypotField = honeypotField
+		}
 	case "F2M_RATE_LIMIT":
 		rateLimit, err := time.ParseDuration(value)
 		if err != nil {
@@ -332,6 +342,34 @@ func parseBool(value string) bool {
 	default:
 		return false
 	}
+}
+
+/**
+ * honeypot有効判定。
+ *
+ * 明示的な無効値以外を有効として扱う処理。
+ */
+func honeypotEnabled(value string) bool {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "", "off", "false", "no", "0":
+		return false
+	default:
+		return true
+	}
+}
+
+/**
+ * honeypotフィールド名生成。
+ *
+ * bot検知用の内部入力名を暗号学的乱数から生成する処理。
+ */
+func newHoneypotFieldName() (string, error) {
+	randomBytes := make([]byte, 8)
+	if _, err := rand.Read(randomBytes); err != nil {
+		return "", err
+	}
+
+	return "f2m_hp_" + hex.EncodeToString(randomBytes), nil
 }
 
 /**

@@ -48,3 +48,4 @@ F2M_CSV_CHARSET : SJIS
 # ---------------------------------------------
 F2M_CSRF : on
 F2M_TOKEN_EXPIRE : 30m
+F2M_HONEYPOT : on

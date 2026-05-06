@@ -35,6 +35,7 @@ F2M_CHK_EMAIL : mail
 F2M_CHK_EQ : mail:mail2
 F2M_CSV_CHARSET : CP932
 F2M_TOKEN_EXPIRE : 15m
+F2M_HONEYPOT : on
 F2M_FORMERR : old-error.html
 `
 
@@ -65,6 +66,12 @@ F2M_FORMERR : old-error.html
 	}
 	if formConfig.CSVCharset != "CP932" {
 		t.Fatalf("CSVCharset = %q", formConfig.CSVCharset)
+	}
+	if !formConfig.HoneypotEnabled {
+		t.Fatal("HoneypotEnabled is false")
+	}
+	if !strings.HasPrefix(formConfig.HoneypotField, "f2m_hp_") {
+		t.Fatalf("HoneypotField = %q", formConfig.HoneypotField)
 	}
 }
 
@@ -162,6 +169,8 @@ func TestLoadFileSampleConfig(t *testing.T) {
 	t.Logf("CSVCharset = %s", formConfig.CSVCharset)
 	t.Logf("CSRF = %t", formConfig.CSRF)
 	t.Logf("TokenExpire = %s", formConfig.TokenExpire)
+	t.Logf("HoneypotEnabled = %t", formConfig.HoneypotEnabled)
+	t.Logf("HoneypotField = %s", formConfig.HoneypotField)
 
 	if formConfig.FormPath != "./form.html" {
 		t.Fatalf("FormPath = %q", formConfig.FormPath)
@@ -183,5 +192,11 @@ func TestLoadFileSampleConfig(t *testing.T) {
 	}
 	if formConfig.CSVCharset != "SJIS" {
 		t.Fatalf("CSVCharset = %q", formConfig.CSVCharset)
+	}
+	if !formConfig.HoneypotEnabled {
+		t.Fatal("HoneypotEnabled is false")
+	}
+	if !strings.HasPrefix(formConfig.HoneypotField, "f2m_hp_") {
+		t.Fatalf("HoneypotField = %q", formConfig.HoneypotField)
 	}
 }
